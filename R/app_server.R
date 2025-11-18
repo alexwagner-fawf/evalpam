@@ -1,206 +1,211 @@
-#' The application server-side
-#'
-#' @param input,output,session Internal parameters for {shiny}.
-#'     DO NOT REMOVE.
-#' @import shiny
-#' @noRd
 app_server <- function(input, output, session) {
-  # ============================================================================
-  # Bird Sound Verification App - Server Logic
-  # ===========================================================================
+
+  # ---- Authentication ----
+  res_auth <- shinymanager::secure_server(
+    check_credentials = shinymanager::check_credentials(credentials)
+  )
+
+  # ---- Reactive Table ----
   this_table <- reactiveValues(data = meta_data)
 
-    # Authentication ----
-    res_auth <- secure_server(
-      check_credentials = check_credentials(credentials)
+
+  # ---- Video Control ----
+  observeEvent(input$seq, {
+    changeVideo("video", input$seq)
+    seekVideo("video", seek = 5)
+    playVideo("video")
+  })
+
+
+  # ---- Filtered Data for Current Sequence ----
+  df_filter <- reactive({
+    this_table$data |>
+      dplyr::filter(path == input$seq) |>
+      dplyr::arrange(dplyr::desc(score))
+  })
+
+
+  # ---- Previously edited warning ----
+  warning_text <- reactive({
+    req(input$seq)
+
+    check_temp <- this_table$data |>
+      dplyr::filter(path == input$seq)
+
+    if (nrow(check_temp) > 0 && !is.null(check_temp$timestamp)) {
+      check_temp2 <- check_temp |>
+        dplyr::distinct(score, timestamp) |>
+        dplyr::slice(1)
+
+      if (is.na(check_temp2$score)) {
+        return(paste("Du hast diese Sequenz bereits bearbeitet am", check_temp2$timestamp))
+      }
+    }
+
+    return("")
+  })
+
+
+  # ---- Update species selection ----
+  observeEvent(input$seq, {
+    x <- df_filter()
+
+    if (!is.null(x) && nrow(x) > 0) {
+      selected_species <- if (is.na(x$species_to_check[1])) {
+        x$prediction[1]
+      } else {
+        x$species_to_check[1]
+      }
+
+      shinyWidgets::updateMultiInput(
+        session,
+        "inSelect",
+        label = "Vogelarten auswählen:",
+        choices = arten,
+        selected = selected_species
+      )
+    }
+  })
+
+
+  # ---- Save verification ----
+  observeEvent(input$add_btn, {
+    req(input$seq)
+
+    old_df <- this_table$data |>
+      dplyr::filter(path != input$seq)
+
+    add_df <- this_table$data |>
+      dplyr::filter(path == input$seq) |>
+      dplyr::distinct(path, .keep_all = TRUE) |>
+      dplyr::mutate(species_to_check = NA)
+
+    # Set prediction(s)
+    if (is.null(input$inSelect) || length(input$inSelect) == 0) {
+      add_df$prediction <- "falsch"
+    } else {
+      add_df$prediction <- list(input$inSelect)
+      add_df <- add_df |>
+        tidyr::unnest(cols = c(prediction))
+    }
+
+    # Update reactive table
+    this_table$data <- rbind(add_df, old_df)
+
+    # Prepare export row
+    export_df <- add_df |>
+      dplyr::mutate(test_file = NA) |>
+      dplyr::select(
+        verification = prediction,
+        id_seq,
+        start,
+        end,
+        test_file,
+        path,
+        plot_info
+      ) |>
+      dplyr::mutate(
+        timestamp = lubridate::now(),
+        verification_by = res_auth$user
+      )
+
+    # Append to EXPORT_FILE
+    readr::write_csv(
+      export_df,
+      EXPORT_FILE,
+      append = TRUE
     )
 
-    # Video Control ----
-    observeEvent(input$seq, {
-      changeVideo("video", input$seq)
+
+    # ---- Move to next audio sequence ----
+    current_idx <- which(audio_files$path == input$seq)
+    next_idx <- current_idx + 1
+
+    if (next_idx > nrow(audio_files)) {
+      showModal(modalDialog(
+        title = "Fertig!",
+        "Alle Sequenzen wurden angesehen!",
+        easyClose = TRUE
+      ))
+    } else {
+      next_path <- audio_files$path[next_idx]
+
+      changeVideo("video", next_path)
+
+      updateSelectizeInput(
+        session,
+        "seq",
+        choices = mylist,
+        selected = next_path
+      )
+
       seekVideo("video", seek = 5)
       playVideo("video")
-    })
+    }
+  })
 
-    # Filter Data for Current Sequence ----
-    df_filter <- reactive({
-      this_table$data %>%
-        filter(path == input$seq) %>%
-        arrange(desc(score))
-    })
 
-    # Warning Text for Previously Edited Sequences ----
-    warning_text <- reactive({
-      req(input$seq)
+  # ---- Output: Username ----
+  output$user_info <- renderUI({
+    tags$h3(paste0("Hallo ", res_auth$user, "!"))
+  })
 
-      check_temp <- this_table$data %>%
-        filter(path == input$seq)
+  # ---- Output: Warning ----
+  output$text1 <- renderText({
+    warning_text()
+  })
 
-      if (nrow(check_temp) > 0 && !is.null(check_temp$timestamp)) {
-        check_temp2 <- check_temp %>%
-          distinct(score, timestamp) %>%
-          slice(1)
 
-        if (is.na(check_temp2$score)) {
-          return(paste("Du hast diese Sequenz bereits bearbeitet am", check_temp2$timestamp))
-        }
-      }
+  # ---- Output: Table ----
+  output$table_bnet <- renderDataTable({
+    req(df_filter())
 
-      return("")
-    })
+    df <- df_filter()
 
-    # Update Species Selection ----
-    observeEvent(input$seq, {
-      x <- df_filter()
+    if (nrow(df) > 0 && !is.na(df$species_to_check[1])) {
+      highlight_row <- which(df$species_to_check == df$prediction)[1]
 
-      if (!is.null(x) && nrow(x) > 0) {
-        selected_species <- if (is.na(x$species_to_check[1])) {
-          x$prediction[1]
-        } else {
-          x$species_to_check[1]
-        }
-
-        updateMultiInput(
-          session,
-          "inSelect",
-          label = "Vogelarten auswählen:",
-          choices = arten,
-          selected = selected_species
+      DT::datatable(
+        df |> dplyr::select(species_to_check, prediction, score),
+        options = list(
+          dom = "t",
+          columnDefs = list(list(visible = FALSE, targets = "species_to_check"))
         )
-      }
-    })
-
-    # Save Verification ----
-    observeEvent(input$add_btn, {
-      req(input$seq)
-
-      # Prepare data to save
-      old_df <- this_table$data %>%
-        filter(path != input$seq)
-
-      add_df <- this_table$data %>%
-        filter(path == input$seq) %>%
-        distinct(path, .keep_all = TRUE) %>%
-        mutate(species_to_check = NA)
-
-      # Set prediction based on input
-      if (is.null(input$inSelect) || length(input$inSelect) == 0) {
-        add_df$prediction <- "falsch"
-      } else {
-        add_df$prediction <- list(input$inSelect)
-        add_df <- add_df %>%
-          tidyr::unnest(cols = c(prediction))
-      }
-
-      # Update reactive data
-      this_table$data <- rbind(add_df, old_df)
-
-      # Export to CSV
-      export_df <- add_df %>%
-        mutate(test_file = NA) %>%
-        select(
-          verification = prediction,
-          id_seq,
-          start,
-          end,
-          test_file,
-          path,
-          plot_info
-        ) %>%
-        mutate(
-          timestamp = lubridate::now(),
-          verification_by = res_auth$user
+      ) |>
+        DT::formatRound("score", digits = 3) |>
+        DT::formatStyle(
+          0,
+          target = "row",
+          backgroundColor = DT::styleEqual(highlight_row, "lightgrey")
         )
+    }
+  })
 
-      # Append to CSV
-      write_csv(
-        export_df,
-        EXPORT_FILE,
-        append = TRUE
-      )
 
-      # Navigate to next sequence
-      current_idx <- which(audio_files$path == input$seq)
-      next_idx <- current_idx + 1
+  # ---- Output: Plot info ----
+  output$plot_info <- renderUI({
+    req(df_filter())
 
-      if (next_idx > nrow(audio_files)) {
-        showModal(modalDialog(
-          title = "Fertig!",
-          "Alle Sequenzen wurden angesehen!",
-          easyClose = TRUE
-        ))
-      } else {
-        next_path <- audio_files$path[next_idx]
+    tags$h5(
+      df_filter() |> dplyr::distinct(plot_info) |> dplyr::pull(plot_info)
+    )
+  })
 
-        changeVideo("video", next_path)
-        updateSelectizeInput(
-          session,
-          "seq",
-          choices = mylist,
-          selected = next_path
-        )
-        seekVideo("video", seek = 5)
-        playVideo("video")
-      }
-    })
 
-    # Outputs ----
+  # ---- Output: Map ----
+  output$map <- renderUI({
+    req(df_filter())
 
-    output$user_info <- renderUI({
-      tags$h3(paste0("Hallo ", res_auth$user, "!"))
-    })
+    url_temp <- df_filter() |>
+      dplyr::distinct(plot_info) |>
+      tidyr::separate(plot_info, into = c("id", "id_2", "id_3"), sep = " ") |>
+      dplyr::left_join(coords, by = "id") |>
+      dplyr::pull(url)
 
-    output$text1 <- renderText({
-      warning_text()
-    })
+    tagList(
+      "Aufnahmeort: ",
+      a("Karte öffnen", href = url_temp, target = "_blank")
+    )
+  })
 
-    output$table_bnet <- renderDataTable({
-      req(df_filter())
-
-      df <- df_filter()
-
-      if (nrow(df) > 0 && !is.na(df$species_to_check[1])) {
-        highlight_row <- which(df$species_to_check == df$prediction)[1]
-
-        datatable(
-          df %>% select(species_to_check, prediction, score),
-          options = list(
-            dom = 't',
-            columnDefs = list(list(visible = FALSE, targets = "species_to_check"))
-          ),
-          rownames = TRUE
-        ) %>%
-          formatRound(columns = 'score', digits = 3) %>%
-          formatStyle(
-            0,
-            target = "row",
-            backgroundColor = styleEqual(highlight_row, "lightgrey")
-          )
-      }
-    })
-
-    output$plot_info <- renderUI({
-      req(df_filter())
-
-      tags$h5(
-        df_filter() %>%
-          distinct(plot_info) %>%
-          pull(plot_info)
-      )
-    })
-
-    output$map <- renderUI({
-      req(df_filter())
-
-      url_temp <- df_filter() %>%
-        distinct(plot_info) %>%
-        tidyr::separate(plot_info, into = c("id", "id_2", "id_3"), sep = " ") %>%
-        left_join(coords, by = "id") %>%
-        pull(url)
-
-      tagList(
-        "Aufnahmeort: ",
-        a("Karte öffnen", href = url_temp, target = "_blank")
-      )
-    })
 }

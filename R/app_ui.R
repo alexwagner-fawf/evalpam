@@ -41,7 +41,7 @@ app_ui <- function(request) {
           br(),
 
           # Species Selection
-          multiInput(
+          shinyWidgets::multiInput(
             inputId = "inSelect",
             label = "Vogelarten:",
             choices = arten,
