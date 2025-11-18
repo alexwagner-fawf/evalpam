@@ -1,0 +1,8 @@
+verification,id_seq,start,end,test_file,path,timestamp,verification_by,plot_info
+Gartenrotschwanz,1,142,150,NA,sample_audio/1.mp4,11_FF 2021-04-03 10:53:00,2025-11-05T12:22:59Z,Gabriel
+Karmingimpel,1,142,150,NA,sample_audio/1.mp4,11_FF 2021-04-03 10:53:00,2025-11-05T12:22:59Z,Gabriel
+falsch,1,142,150,NA,sample_audio/1.mp4,11_FF 2021-04-03 10:53:00,2025-11-05T12:23:21Z,Gabriel
+Gelbspötter,5,184,192,NA,sample_audio/5.mp4,01_SF 2021-06-08 07:46:00,2025-11-05T12:23:44Z,Gabriel
+Waldwasserläufer,5,184,192,NA,sample_audio/5.mp4,01_SF 2021-06-08 07:46:00,2025-11-05T12:23:44Z,Gabriel
+Waldlaubsänger,5,184,192,NA,sample_audio/5.mp4,01_SF 2021-06-08 07:46:00,2025-11-05T12:23:44Z,Gabriel
+Karmingimpel,5,184,192,NA,sample_audio/5.mp4,01_SF 2021-06-08 07:46:00,2025-11-05T12:23:44Z,Gabriel

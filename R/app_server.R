@@ -11,9 +11,9 @@ app_server <- function(input, output, session) {
 
   # ---- Video Control ----
   observeEvent(input$seq, {
-    changeVideo("video", input$seq)
-    seekVideo("video", seek = 5)
-    playVideo("video")
+    video::changeVideo("video", input$seq)
+    video::seekVideo("video", seek = 5)
+    video::playVideo("video")
   })
 
 
@@ -130,7 +130,7 @@ app_server <- function(input, output, session) {
     } else {
       next_path <- audio_files$path[next_idx]
 
-      changeVideo("video", next_path)
+      video::changeVideo("video", next_path)
 
       updateSelectizeInput(
         session,
@@ -139,8 +139,8 @@ app_server <- function(input, output, session) {
         selected = next_path
       )
 
-      seekVideo("video", seek = 5)
-      playVideo("video")
+      video::seekVideo("video", seek = 5)
+      video::playVideo("video")
     }
   })
 
@@ -157,7 +157,7 @@ app_server <- function(input, output, session) {
 
 
   # ---- Output: Table ----
-  output$table_bnet <- renderDataTable({
+  output$table_bnet <-DT::renderDataTable({
     req(df_filter())
 
     df <- df_filter()

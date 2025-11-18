@@ -5,6 +5,20 @@
 #' @import shiny
 #' @noRd
 app_ui <- function(request) {
+
+  data <- getOption("evalpam.data")
+  mylist <- data$mylist
+  arten  <- data$arten
+
+  mylist <- unlist(data$mylist, recursive = TRUE, use.names = FALSE)
+  mylist <- as.character(mylist)
+
+  arten <- as.character(data$arten)
+
+
+  print(arten)
+  print(mylist)
+
   ui <- tagList(
     # Leave this function for adding external resources
     golem_add_external_resources(),
@@ -56,7 +70,7 @@ app_ui <- function(request) {
 
           # BirdNET Predictions Table
           h4("BirdNET Vorhersagen:"),
-          dataTableOutput('table_bnet'),
+          DT::DTOutput('table_bnet'),
 
           br(),
 
@@ -83,7 +97,7 @@ app_ui <- function(request) {
 
           h2("Spektrogramm"),
 
-          video(
+          video::video(
             elementId = "video",
             files = NULL
           )
@@ -92,12 +106,11 @@ app_ui <- function(request) {
     )
   )
 
-  shinymanager::secure_app(
-    ui = ui,
-    # optional options:
-    theme = bslib::bs_theme(),
-    enable_admin = TRUE
-  )
+  # shinymanager::secure_app(
+  #   ui = ui,
+  #   theme = bslib::bs_theme(),
+  #   enable_admin = TRUE
+  # )
 
 }
 
@@ -110,10 +123,7 @@ app_ui <- function(request) {
 #' @importFrom golem add_resource_path activate_js favicon bundle_resources
 #' @noRd
 golem_add_external_resources <- function() {
-  add_resource_path(
-    "www",
-    app_sys("app/www")
-  )
+  add_resource_path( "www", app_sys("app/www") )
 
   tags$head(
     favicon(),
