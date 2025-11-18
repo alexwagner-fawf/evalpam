@@ -1,13 +1,14 @@
 app_server <- function(input, output, session) {
 
+
+
   # ---- Authentication ----
   res_auth <- shinymanager::secure_server(
     check_credentials = shinymanager::check_credentials(credentials)
   )
 
   # ---- Reactive Table ----
-  this_table <- reactiveValues(data = meta_data)
-
+  this_table <- reactiveValues(data = getOption("evalpam.data")$data)
 
   # ---- Video Control ----
   observeEvent(input$seq, {
@@ -61,7 +62,6 @@ app_server <- function(input, output, session) {
         session,
         "inSelect",
         label = "Vogelarten auswählen:",
-        choices = arten,
         selected = selected_species
       )
     }
@@ -199,7 +199,7 @@ app_server <- function(input, output, session) {
     url_temp <- df_filter() |>
       dplyr::distinct(plot_info) |>
       tidyr::separate(plot_info, into = c("id", "id_2", "id_3"), sep = " ") |>
-      dplyr::left_join(coords, by = "id") |>
+      dplyr::left_join(getOption("evalpam.data")$coords, by = "id") |>
       dplyr::pull(url)
 
     tagList(

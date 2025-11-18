@@ -10,15 +10,6 @@ app_ui <- function(request) {
   mylist <- data$mylist
   arten  <- data$arten
 
-  mylist <- unlist(data$mylist, recursive = TRUE, use.names = FALSE)
-  mylist <- as.character(mylist)
-
-  arten <- as.character(data$arten)
-
-
-  print(arten)
-  print(mylist)
-
   ui <- tagList(
     # Leave this function for adding external resources
     golem_add_external_resources(),
@@ -105,13 +96,6 @@ app_ui <- function(request) {
       )
     )
   )
-
-  # shinymanager::secure_app(
-  #   ui = ui,
-  #   theme = bslib::bs_theme(),
-  #   enable_admin = TRUE
-  # )
-
 }
 
 #' Add external Resources to the Application

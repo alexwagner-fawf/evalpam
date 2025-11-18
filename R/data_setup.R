@@ -1,9 +1,10 @@
 #' Internal function to load package data
+#' This will be replaced by database imports
 #'
 #' @noRd
 data_setup <- function() {
 # =====================================================================
-# data_setup.R  — Golem-safe data loading for Bird Sound App
+# data_setup.R  — data loading
 # =====================================================================
 
 # Safe internal paths -------------------------------------------------
@@ -12,13 +13,6 @@ metadata_file <- system.file("app/data/metadata.csv", package = "evalpam")
 species_file  <- system.file("app/data/arten_liste.csv", package = "evalpam")
 coords_file  <- system.file("app/data/ffk_asf.csv", package = "evalpam")
 export_file   <- system.file("app/data/export.csv", package = "evalpam")
-#
-# print(AUDIO_DIR)
-# print(METADATA_FILE)
-# print(SPECIES_FILE )
-# print(COORDS_FILE)
-# print(EXPORT_FILE)
-
 
 # ---- Read species ----
 arten <- readr::read_csv(species_file, show_col_types = FALSE) |>
@@ -70,7 +64,7 @@ meta_data <- readr::read_csv(metadata_file, show_col_types = FALSE) |>
 options(evalpam.data = list(
   arten = arten,
   coords = coords,
-  meta_data = meta_data,
+  data = meta_data,
   audio_files = audio_files,
   mylist = mylist,
   export_file = export_file
