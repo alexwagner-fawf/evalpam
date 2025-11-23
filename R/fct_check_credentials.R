@@ -9,7 +9,6 @@
 check_credentials_db <- function(pool) {
   function(user, password) {
 
-    print(pool)
     row <- DBI::dbGetQuery(
       pool,
       "SELECT password_hash
@@ -20,8 +19,9 @@ check_credentials_db <- function(pool) {
 
     if (nrow(row) == 1 && bcrypt::checkpw(password, row$password_hash)) {
       return(list(result = TRUE, user = user))
+    }else{
+      return(list(result = FALSE, user = user))
     }
 
-    return(FALSE)
   }
 }

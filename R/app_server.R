@@ -4,7 +4,7 @@ app_server <- function(input, output, session) {
 
   # ---- Authentication ----
   res_auth <- shinymanager::secure_server(
-    check_credentials = check_credentials_db(pool)
+      check_credentials = check_credentials_db(pool)
   )
 
   # ---- Reactive Table ----
