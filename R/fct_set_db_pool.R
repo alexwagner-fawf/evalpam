@@ -1,8 +1,8 @@
 #' set_db_pool
 #'
-#' @description A fct function
+#' @description Establish a pool connection using credentials from golem-config.yml. Password is currently stored in the .Renviron file.
 #'
-#' @return The return value, if any, from executing the function.
+#' @return A pool connection, FALSE if connection did not work. In running shiny session, a shinyalert will appear.
 #'
 #' @noRd
 set_db_pool <- function() {
@@ -12,7 +12,7 @@ set_db_pool <- function() {
                  host = get_golem_config("pg_host"),
                  port = get_golem_config("pg_port"),
                  dbname = get_golem_config("pg_dbname"),
-                 password = Sys.getenv("evalpam_pw")
+                 password = rawToChar(base64enc::base64decode(Sys.getenv("evalpam_pw")))
     )
   },
   error = function(e){
