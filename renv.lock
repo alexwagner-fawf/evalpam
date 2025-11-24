@@ -1520,6 +1520,56 @@
       "Maintainer": "Hadley Wickham <hadley@rstudio.com>",
       "Repository": "CRAN"
     },
+    "evalpam": {
+      "Package": "evalpam",
+      "Version": "0.0.0.9000",
+      "Source": "GitHub",
+      "Title": "Evaluate passive acoustic monitoring data",
+      "Authors@R": "c( person(\"Gabriel\", \"Holz\", , \"Gabriel.Holz@forst.bwl.de\", role = \"aut\"), person(\"Alexander\", \"Wagner\", , \"alexander.wagner@wald-rlp.de\", role = c(\"aut\", \"cre\")) )",
+      "Description": "A Shiny app to evaluate AI-annotated passive acoustic monitoring data in a database environment.",
+      "License": "What license is it under?",
+      "Imports": [
+        "base64enc",
+        "bcrypt",
+        "config",
+        "DBI",
+        "dplyr",
+        "DT",
+        "golem",
+        "here",
+        "lubridate",
+        "pool",
+        "readr",
+        "RPostgres",
+        "shiny",
+        "shinyalert",
+        "shinymanager",
+        "shinyWidgets",
+        "stringi",
+        "tidyr",
+        "video"
+      ],
+      "Suggests": [
+        "spelling",
+        "testthat (>= 3.0.0)"
+      ],
+      "Config/testthat/edition": "3",
+      "Encoding": "UTF-8",
+      "Language": "en-US",
+      "RoxygenNote": "7.3.3",
+      "RemoteType": "github",
+      "RemoteHost": "api.github.com",
+      "RemoteRepo": "evalpam",
+      "RemoteUsername": "alexwagner-fawf",
+      "RemoteRef": "HEAD",
+      "RemoteSha": "bc63dc86da7d2f9c5a86e1d57d3cc8bc00c87ebf",
+      "NeedsCompilation": "no",
+      "Author": "Gabriel Holz [aut], Alexander Wagner [aut, cre]",
+      "Maintainer": "Alexander Wagner <alexander.wagner@wald-rlp.de>",
+      "Depends": [
+        "R (>= 4.1.0)"
+      ]
+    },
     "evaluate": {
       "Package": "evaluate",
       "Version": "1.0.5",

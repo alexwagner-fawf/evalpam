@@ -17,4 +17,6 @@ setup_renviron <- function(filepath = here::here(".Renviron"),
     ) |>
       write(filepath)
   }
+
+  readRenviron(filepath)
 }
