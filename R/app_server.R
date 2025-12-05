@@ -4,8 +4,18 @@ app_server <- function(input, output, session) {
 
   # ---- Authentication ----
   res_auth <- shinymanager::secure_server(
-      check_credentials = check_credentials_db(pool)
-  )
+      check_credentials = check_credentials_db(pool))
+
+  observe({
+    # Convert reactiveValues to a list so we can see all contents
+    current_auth <- reactiveValuesToList(res_auth)
+
+    print("--- AUTH STATUS UPDATE ---")
+    print(str(current_auth))
+  })
+
+
+
 
   # ---- Reactive Table ----
   this_table <- reactiveValues(data = getOption("evalpam.data")$data)

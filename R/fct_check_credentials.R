@@ -17,38 +17,29 @@ check_credentials_db <- function(pool) {
       params = list(user)
     )
 
-
-
     if (nrow(row) == 1 && bcrypt::checkpw(password, row$password_hash)) {
 
       pg_role <- DBI::dbGetQuery(
         pool,
-        "SELECT pg_role
-       FROM app_user_roles
-       WHERE pameval_user = $1",
+        "SELECT pg_role FROM app_user_roles WHERE pameval_user = $1",
         params = list(user)
       ) |>
         dplyr::pull(pg_role)
 
       if(length(pg_role) == 0 || is.null(pg_role)) {
+        return(list(result = FALSE, message = "No role assigned"))
+      } else {
+        # SUCCESS
         return(list(
-          result = FALSE,
-          user = user,
-          message = "No role assigned to user"
+          result = TRUE,
+          user_info = data.frame(user = user,
+                                 admin = isTRUE(pg_role == "evalpam_admin"),
+                                 pg_role = as.character(pg_role))
         ))
-      }else{
-        message("login success")
-        return(list(result = TRUE,
-                    user = user,
-                    admin = pg_role == "evalpam_admin",
-                    role = pg_role))
       }
 
-    }else{
-      return(list(result = FALSE,
-                  user = user))
+    } else {
+      return(list(result = FALSE, user = user))
     }
-
   }
 }
-

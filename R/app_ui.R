@@ -23,18 +23,17 @@ app_ui <- function(request) {
         # Sidebar ----
         sidebarPanel(
           width = 4,
-
           # User Info
           uiOutput("user_info"),
 
           # Sequence Selection
           selectizeInput(
             "seq",
+
             "Sequenz:",
             choices = mylist,
             options = list(maxOptions = 10000)
           ),
-
           # Warning Text
           textOutput('text1'),
           tags$head(tags$style("#text1{
@@ -44,7 +43,6 @@ app_ui <- function(request) {
       }")),
 
           br(),
-
           # Species Selection
           shinyWidgets::multiInput(
             inputId = "inSelect",
