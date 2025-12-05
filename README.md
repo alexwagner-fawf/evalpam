@@ -24,7 +24,7 @@ remotes::install_github("alexwagner-fawf/evalpam")
 A postgres server with admin rights (database creation) is required. Enter the credentials here. No admin credentials will be stored. Instead, a new postgres user will be defined (evalpam_username) with a given password (evalpam_pw). This password will be stored obfuscated in an .Renviron file at a defined location. The password is one neccessary information to access the app. 
 
 ```r
-evalpam::setup_app(user = "postgres",
+evalpam:::setup_app(user = "postgres",
                      host = "localhost",
                      port = 5432,
                      maintenance_dbname = "postgres",
@@ -43,8 +43,8 @@ After setting up the app and the database, you can add users to the database. Th
 Next, you setup a pool connection with admin rights for pameval_db. 
 
 ```r
-pool <- pool::pool(user = "postgres, password = "postgres")
-evalpam::add_users(pameval_user = "birdfreak", password = "password", pg_role = "birder", active = TRUE)
+pool <- evalpam:::set_db_pool(user = "postgres", password = "postgres")
+evalpam:::add_users(pool, pameval_user = "birdfreak", password = "password", pg_role = "evalpam_birder", active = TRUE)
 ```
 
 Now you created your first user and you can start the app
