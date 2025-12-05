@@ -18,9 +18,39 @@ Install the latest version of `evalpam` directly from GitHub:
 remotes::install_github("alexwagner-fawf/evalpam")
 ``` 
 
-## Start
+## Setting up the app for the first time
 
-Once installed run via
+### Initializing the database 
+A postgres server with admin rights (database creation) is required. Enter the credentials here. No admin credentials will be stored. Instead, a new postgres user will be defined (evalpam_username) with a given password (evalpam_pw). This password will be stored obfuscated in an .Renviron file at a defined location. The password is one neccessary information to access the app. 
+
+```r
+pameval::setup_app(user = "postgres",
+                     host = "localhost",
+                     port = 5432,
+                     maintenance_dbname = "postgres",
+                     password = "postgres",
+                     evalpam_username = "evalpam_user",
+                     evalpam_pw = "new_evalpam_pw",
+                     evalpam_dbname = "evalpam_db",
+                     admin_mailaddress = "emailaddress@required.com",
+                     initialize_db = TRUE,
+                     renviron_dir = NULL)
+```
+
+# Adding users
+After setting up the app and the database, you can add users to the database. The passwords will be stored in database tables encrypted with salt (bcrypt). 
+
+Next, you setup a pool connection with admin rights for pameval_db. 
+
+```r
+pool <- pool::pool(user = "postgres, password = "postgres")
+pameval::add_users(pameval_user = "birdfreak", password = "password", pg_role = "birder", active = TRUE)
+```
+
+Now you created your first user and you can start the app
+
+## Start the app
+Once you successfully finished the previous steps, the app is ready to run. You have to enter the credentials of the add_users function to access it.
 
 ```r
 pameval::run_app()
