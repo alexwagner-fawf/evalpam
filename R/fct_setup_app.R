@@ -14,7 +14,7 @@ setup_app <- function(user = "postgres",
                      evalpam_pw = "new_evalpam_pw",
                      evalpam_dbname = "evalpam_db",
                      admin_mailaddress = "emailaddress_required",
-                     setup_db = FALSE,
+                     initialize_db = FALSE,
                      renviron_dir = NULL) {
 
   pool <- set_db_pool(user = user,
@@ -38,11 +38,36 @@ setup_app <- function(user = "postgres",
 
   # setup golem config and Renviron for database connection
 
-    golem::amend_golem_config("pg_host", host)
-    golem::amend_golem_config("pg_port", port)
-    golem::amend_golem_config("pg_dbname", evalpam_dbname)
-    golem::amend_golem_config("pg_user", evalpam_username)
-    golem::amend_golem_config("admin_mailaddress", admin_mailaddress)
+  config_path <- system.file("golem-config.yml", package = "evalpam")
+
+  if(config_path == "") {
+    stop("golem-config.yml not found in installed package")
+  }
+
+  # check permissions
+  if(!file.access(config_path, mode = 2) == 0) {
+    stop(
+      "No write permissions for config file at: ", config_path, "\n",
+      "This setup function must be run with admin/sudo rights to modify the installed package.\n"
+    )
+  }
+
+  message("Updating golem-config at: ", config_path)
+
+  # read config
+  config <- yaml::read_yaml(config_path)
+
+  # Update values
+  config$default$pg_host <- host
+  config$default$pg_port <- port
+  config$default$pg_dbname <- evalpam_dbname
+  config$default$pg_user <- evalpam_username
+  config$default$admin_mailaddress <- admin_mailaddress
+
+  # save changes
+  yaml::write_yaml(config, config_path)
+  message("✓ Config file updated successfully")
+
 
     if(is.null(renviron_dir)) renviron_dir <- here::here()
 
@@ -50,9 +75,16 @@ setup_app <- function(user = "postgres",
                    overwrite = TRUE,
                    evalpam_pw = evalpam_pw)
 
-  if(setup_db){
-    setup_db(pool)
+  if(initialize_db){
+    setup_db(pool = pool,
+             user = user,
+             host = host,
+             port = port,
+             evalpam_dbname = evalpam_dbname,
+             password = password,
+             config = config)
   }
+
 
   # test connection with config
   pool::poolClose(pool)
@@ -63,10 +95,7 @@ setup_app <- function(user = "postgres",
 
 
 
-setup_db <- function(pool){
-  on.exit({
-    pool::poolClose(pool)
-  })
+setup_db <- function(user, host, port, evalpam_dbname, password, pool, config){
 
   sql_dir <- app_sys("sql")
 
@@ -93,7 +122,7 @@ setup_db <- function(pool){
     for(statement in statements){
       statement <- glue::glue_sql(statement,
                                   DB_PASSWORD_EVALPAM_USER = rawToChar(base64enc::base64decode(Sys.getenv("evalpam_pw"))),
-                                  DB_EVALPAM_USER = get_golem_config("pg_user"),
+                                  DB_EVALPAM_USER = config$default$pg_user,
                                   .con = pool)
 
       tryCatch({
@@ -101,7 +130,7 @@ setup_db <- function(pool){
       },
       error = function(e){
         print(e)
-        message(paste("Statement skipped: Error when running", statement))
+        warning(paste("Statement skipped: Error when running", statement))
       })
     }
 
