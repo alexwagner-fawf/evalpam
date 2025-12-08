@@ -67,7 +67,7 @@ evalpam:::add_users(pool,
                       last_name = "Doe", 
                       email = "jane.doe@web.com", 
                       active = TRUE, 
-                      expire_date = NULL)
+                      expire_date = NA)
 
 pool::poleClose(pool)
 
