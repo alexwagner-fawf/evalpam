@@ -1,5 +1,7 @@
 # evalpam
 
+!!! IN CONSTRUCTION !!!
+
 **`evalpam`** is a Shiny application for evaluating AI-annotated data from passive acoustic monitoring (PAM). The app is designed to streamline the assessment of automated annotations, helping researchers and practitioners ensure data quality and accuracy.
 
 ---
@@ -69,7 +71,7 @@ evalpam:::add_users(pool,
                       active = TRUE, 
                       expire_date = NA)
 
-pool::poleClose(pool)
+pool::poolClose(pool)
 
 ```
 
