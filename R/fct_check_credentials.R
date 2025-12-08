@@ -21,7 +21,7 @@ check_credentials_db <- function(pool) {
       return(list(result = FALSE, user = user))
     }
 
-    if(!is.null(row$expire_date)){
+    if(!is.na(row$expire_date)){
       if(row$expire_date <= Sys.Date()){
         if(isRunning()) shinyalert::shinyalert(title = "Expired User", text = "Please contact your admin")
         message("expired user login")
