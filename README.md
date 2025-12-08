@@ -71,7 +71,7 @@ evalpam:::add_users(pool,
                       active = TRUE, 
                       expire_date = NA)
 
-pool::poleClose(pool)
+pool::poolClose(pool)
 
 ```
 
