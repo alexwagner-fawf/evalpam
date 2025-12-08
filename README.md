@@ -47,7 +47,7 @@ pool <- evalpam:::set_db_pool(user = "postgres", password = "postgres")
 
 
 
-evalpam:::update_user(pool, 
+evalpam:::add_users(pool, 
                       username = "birdfreak", 
                       password = "birdfreak", 
                       pg_role = "evalpam_birder", 
@@ -59,7 +59,7 @@ evalpam:::update_user(pool,
 
 pw <- paste0(c(seq(9), letters)[floor(runif(10)*36)], collapse = "")
 
-evalpam:::update_user(pool, 
+evalpam:::add_users(pool, 
                       username = "technerd", 
                       password = pw, 
                       pg_role = "evalpam_admin", 
@@ -69,10 +69,11 @@ evalpam:::update_user(pool,
                       active = TRUE, 
                       expire_date = NULL)
 
+pool::poleClose(pool)
 
 ```
 
-Now you created your first user and you can start the app
+Now you created your first users. Admins will be allowed to add users and assess the whole dataset whereas birders will only have access to their own records. Now you can start the app and use the username and password credentials used in add_users . 
 
 ## Start the app
 Once you successfully finished the previous steps, the app is ready to run. You have to enter the credentials of the add_users function to access it.
