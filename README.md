@@ -44,7 +44,32 @@ Next, you setup a pool connection with admin rights for pameval_db.
 
 ```r
 pool <- evalpam:::set_db_pool(user = "postgres", password = "postgres")
-evalpam:::add_users(pool, pameval_user = "birdfreak", password = "password", pg_role = "evalpam_birder", active = TRUE)
+
+
+
+evalpam:::update_user(pool, 
+                      username = "birdfreak", 
+                      password = "birdfreak", 
+                      pg_role = "evalpam_birder", 
+                      first_name = "Jon", 
+                      last_name = "Doe", 
+                      email = "jon.doe@web.com", 
+                      active = TRUE, 
+                      expire_date = Sys.Date()+7)
+
+pw <- paste0(c(seq(9), letters)[floor(runif(10)*36)], collapse = "")
+
+evalpam:::update_user(pool, 
+                      username = "technerd", 
+                      password = pw, 
+                      pg_role = "evalpam_admin", 
+                      first_name = "Jane", 
+                      last_name = "Doe", 
+                      email = "jane.doe@web.com", 
+                      active = TRUE, 
+                      expire_date = NULL)
+
+
 ```
 
 Now you created your first user and you can start the app

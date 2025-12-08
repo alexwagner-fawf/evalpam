@@ -1,210 +1,230 @@
-#' Add User to Database
+# ============================================================
+# User Management Functions for app_users / app_user_roles
+# ============================================================
+
+#' Add a User to the Database
 #'
-#' @description Adds a user to app_users and app_user_roles tables
+#' Creates a new entry in `app_users` and assigns at least one role in
+#' `app_user_roles`. Ensures that:
+#' - username is unique
+#' - password meets minimum length requirements
+#' - PostgreSQL role exists
+#' - created_at is set automatically by the database
 #'
-#' @param pool Database connection pool
-#' @param pameval_user Username (primary key)
-#' @param password Plain text password (will be hashed)
-#' @param pg_role PostgreSQL role to assign
-#' @param active Boolean, whether user is active (default: TRUE)
+#' @param pool A DBI connection pool.
+#' @param username Character. Unique username for the new user.
+#' @param password Character. Plain-text password (hashed automatically).
+#' @param pg_role Character. PostgreSQL role to assign.
+#' @param first_name Optional character.
+#' @param last_name Optional character.
+#' @param email Optional character. Stored case-insensitively (CITEXT).
+#' @param expire_date Optional Date. When user account expires.
+#' @param active Logical. Whether the account is active (default TRUE).
 #'
-#' @return List with success status and messages
+#' @return Invisible list containing success status and metadata.
 #'
 #' @export
-add_users <- function(pool, pameval_user, password, pg_role, active = TRUE) {
+add_users <- function(pool, username, password, pg_role,
+                      first_name = NULL,
+                      last_name = NULL,
+                      email = NULL,
+                      expire_date = NULL,
+                      active = TRUE) {
 
-  # === VALIDATION ===
-  if(is.null(pameval_user) || pameval_user == "") {
-    stop("pameval_user cannot be empty")
-  }
+  # ---- Validation ----
+  if (is.null(username) || username == "")
+    stop("username cannot be empty")
 
-  if(is.null(password) || nchar(password) < 8) {
+  if (is.null(password) || nchar(password) < 8)
     stop("password must be at least 8 characters long")
-  }
 
-  if(is.null(pg_role) || pg_role == "") {
+  if (is.null(pg_role) || pg_role == "")
     stop("pg_role cannot be empty")
-  }
 
-  # === CHECK IF ROLE EXISTS ===
-  role_exists <- tryCatch({
-    result <- DBI::dbGetQuery(
-      pool,
-      "SELECT COUNT(*) as count FROM pg_roles WHERE rolname = $1",
-      params = list(pg_role)
-    )
-    result$count[1] > 0
-  }, error = function(e) {
-    stop("Failed to check if role exists: ", e$message)
-  })
+  # ---- Role Exists? ----
+  role_exists <- DBI::dbGetQuery(
+    pool,
+    "SELECT COUNT(*) AS count FROM pg_roles WHERE rolname = $1",
+    params = list(pg_role)
+  )$count > 0
 
-  if(!role_exists) {
-    stop("PostgreSQL role '", pg_role, "' does not exist. Create role first.")
-  }
+  if (!role_exists)
+    stop("PostgreSQL role '", pg_role, "' does not exist.")
 
-  # === CHECK IF USER ALREADY EXISTS ===
-  user_exists <- tryCatch({
-    result <- DBI::dbGetQuery(
-      pool,
-      "SELECT COUNT(*) as count FROM app_users WHERE pameval_user = $1",
-      params = list(pameval_user)
-    )
-    result$count[1] > 0
-  }, error = function(e) {
-    stop("Failed to check if user exists: ", e$message)
-  })
+  # ---- Username Exists? ----
+  user_exists <- DBI::dbGetQuery(
+    pool,
+    "SELECT COUNT(*) AS count FROM app_users WHERE username = $1",
+    params = list(username)
+  )$count > 0
 
-  if(user_exists) {
-    stop("User '", pameval_user, "' already exists. Use update_user() to modify.")
-  }
+  if (user_exists)
+    stop("User '", username, "' already exists.")
 
-  # === HASH PASSWORD ===
+  # ---- Password Hashing ----
   hashed_password <- bcrypt::hashpw(password)
 
-  # === INSERT WITH TRANSACTION ===
+  # ---- Insert Transaction ----
   tryCatch({
     pool::poolWithTransaction(pool, function(conn) {
-      # Insert into app_users
+
+      # Insert new user (created_at handled by DB)
       DBI::dbExecute(
         conn,
-        "INSERT INTO app_users (pameval_user, password_hash, active, created_at) VALUES ($1, $2, $3, $4)",
-        params = list(pameval_user, hashed_password, active, Sys.time())
+        "INSERT INTO app_users
+           (username, password_hash, active, first_name, last_name, email, expire_date)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        params = list(
+          username, hashed_password, active,
+          first_name, last_name, email, expire_date
+        )
       )
 
-      # Insert into app_user_roles
+      # Fetch user_id
+      user_id <- DBI::dbGetQuery(
+        conn,
+        "SELECT user_id FROM app_users WHERE username = $1",
+        params = list(username)
+      )$user_id
+
+      # Assign initial role
       DBI::dbExecute(
         conn,
-        "INSERT INTO app_user_roles (pameval_user, pg_role) VALUES ($1, $2)",
-        params = list(pameval_user, pg_role)
+        "INSERT INTO app_user_roles (user_id, pg_role)
+         VALUES ($1, $2)",
+        params = list(user_id, pg_role)
       )
-
-      # Grant permissions based on role
-      if(pg_role == "evalpam_admin") {
-        # Admin gets full access (SELECT, INSERT, UPDATE, DELETE)
-        DBI::dbExecute(
-          conn,
-          glue::glue_sql("GRANT SELECT, INSERT, UPDATE, DELETE ON app_users TO {`pg_role`}", .con = conn)
-        )
-
-        DBI::dbExecute(
-          conn,
-          glue::glue_sql("GRANT SELECT, INSERT, UPDATE, DELETE ON app_user_roles TO {`pg_role`}", .con = conn)
-        )
-
-        message("✓ Granted full access (SELECT, INSERT, UPDATE, DELETE) to role '", pg_role, "'")
-      } else {
-        # Regular users get read-only access
-        DBI::dbExecute(
-          conn,
-          glue::glue_sql("GRANT SELECT ON app_users TO {`pg_role`}", .con = conn)
-        )
-
-        DBI::dbExecute(
-          conn,
-          glue::glue_sql("GRANT SELECT ON app_user_roles TO {`pg_role`}", .con = conn)
-        )
-
-        message("✓ Granted SELECT access on app_users and app_user_roles to role '", pg_role, "'")
-      }
     })
 
-    message("✓ User '", pameval_user, "' created successfully with role '", pg_role, "'")
-
-    return(invisible(list(
+    invisible(list(
       success = TRUE,
-      user = pameval_user,
-      role = pg_role,
-      active = active
-    )))
+      user = username,
+      role = pg_role
+    ))
 
   }, error = function(e) {
-    # poolWithTransaction handles rollback automatically
     stop("Failed to create user: ", e$message)
   })
 }
 
 
-#' Update existing user
+
+#' Update an Existing User
 #'
-#' @description Updates user password, role, or active status
+#' Allows updating of:
+#' - password (rehashes automatically)
+#' - active status
+#' - first/last name
+#' - email
+#' - expire_date
+#' - roles (adds new role; does not remove existing roles)
+#'
+#' @param pool A DBI connection pool.
+#' @param username Character. Username whose record is updated.
+#' @param password Optional character. New password.
+#' @param pg_role Optional character. New PostgreSQL role to add.
+#' @param active Optional logical.
+#' @param first_name Optional character.
+#' @param last_name Optional character.
+#' @param email Optional character.
+#' @param expire_date Optional Date.
+#'
+#' @return Invisible list with success status.
 #'
 #' @export
-update_user <- function(pool, pameval_user, password = NULL, pg_role = NULL, active = NULL) {
+update_user <- function(pool, username,
+                        password = NULL,
+                        pg_role = NULL,
+                        active = NULL,
+                        first_name = NULL,
+                        last_name = NULL,
+                        email = NULL,
+                        expire_date = NULL) {
 
-  # Check if user exists
-  user_exists <- tryCatch({
-    result <- DBI::dbGetQuery(
-      pool,
-      "SELECT COUNT(*) as count FROM app_users WHERE pameval_user = $1",
-      params = list(pameval_user)
-    )
-    result$count[1] > 0
-  }, error = function(e) {
-    stop("Failed to check if user exists: ", e$message)
-  })
+  # ---- Fetch user_id ----
+  user_row <- DBI::dbGetQuery(
+    pool,
+    "SELECT user_id FROM app_users WHERE username = $1",
+    params = list(username)
+  )
 
-  if(!user_exists) {
-    stop("User '", pameval_user, "' does not exist. Use add_users() to create.")
-  }
+  if (nrow(user_row) == 0)
+    stop("User '", username, "' does not exist.")
 
+  user_id <- user_row$user_id
+
+  # ---- Transaction ----
   tryCatch({
     pool::poolWithTransaction(pool, function(conn) {
-      # Update password if provided
-      if(!is.null(password)) {
-        if(nchar(password) < 8) {
+
+      # Password update
+      if (!is.null(password)) {
+        if (nchar(password) < 8)
           stop("Password must be at least 8 characters long")
-        }
         hashed_password <- bcrypt::hashpw(password)
+
         DBI::dbExecute(
           conn,
-          "UPDATE app_users SET password_hash = $1 WHERE pameval_user = $2",
-          params = list(hashed_password, pameval_user)
+          "UPDATE app_users SET password_hash = $1 WHERE user_id = $2",
+          params = list(hashed_password, user_id)
         )
-        message("Password updated")
       }
 
-      # Update active status if provided
-      if(!is.null(active)) {
+      # Active status
+      if (!is.null(active)) {
         DBI::dbExecute(
           conn,
-          "UPDATE app_users SET active = $1 WHERE pameval_user = $2",
-          params = list(active, pameval_user)
+          "UPDATE app_users SET active = $1 WHERE user_id = $2",
+          params = list(active, user_id)
         )
-        message("✓ Active status updated to: ", active)
       }
 
-      # Update role if provided
-      if(!is.null(pg_role)) {
-        # Check if new role exists
-        role_exists <- tryCatch({
-          result <- DBI::dbGetQuery(
-            conn,
-            "SELECT COUNT(*) as count FROM pg_roles WHERE rolname = $1",
-            params = list(pg_role)
-          )
-          result$count[1] > 0
-        }, error = function(e) {
-          stop("Failed to check if role exists: ", e$message)
-        })
+      # Personal info
+      if (!is.null(first_name))
+        DBI::dbExecute(conn,
+                       "UPDATE app_users SET first_name = $1 WHERE user_id = $2",
+                       params = list(first_name, user_id))
 
-        if(!role_exists) {
-          stop("PostgreSQL role '", pg_role, "' does not exist")
-        }
+      if (!is.null(last_name))
+        DBI::dbExecute(conn,
+                       "UPDATE app_users SET last_name = $1 WHERE user_id = $2",
+                       params = list(last_name, user_id))
 
-        # Update or insert role
+      if (!is.null(email))
+        DBI::dbExecute(conn,
+                       "UPDATE app_users SET email = $1 WHERE user_id = $2",
+                       params = list(email, user_id))
+
+      if (!is.null(expire_date))
+        DBI::dbExecute(conn,
+                       "UPDATE app_users SET expire_date = $1 WHERE user_id = $2",
+                       params = list(expire_date, user_id))
+
+      # Role update
+      if (!is.null(pg_role)) {
+
+        # Verify role exists
+        role_exists <- DBI::dbGetQuery(
+          conn,
+          "SELECT COUNT(*) AS count FROM pg_roles WHERE rolname = $1",
+          params = list(pg_role)
+        )$count > 0
+
+        if (!role_exists)
+          stop("PostgreSQL role '", pg_role, "' does not exist.")
+
+        # Add new role (does not overwrite)
         DBI::dbExecute(
           conn,
-          "INSERT INTO app_user_roles (pameval_user, pg_role)
+          "INSERT INTO app_user_roles (user_id, pg_role)
            VALUES ($1, $2)
-           ON CONFLICT (pameval_user)
-           DO UPDATE SET pg_role = EXCLUDED.pg_role",
-          params = list(pameval_user, pg_role)
+           ON CONFLICT DO NOTHING",
+          params = list(user_id, pg_role)
         )
-        message("✓ Role updated to: ", pg_role)
       }
     })
 
-    return(invisible(list(success = TRUE, user = pameval_user)))
+    invisible(list(success = TRUE, user = username))
 
   }, error = function(e) {
     stop("Failed to update user: ", e$message)
@@ -212,53 +232,48 @@ update_user <- function(pool, pameval_user, password = NULL, pg_role = NULL, act
 }
 
 
-#' Delete user
+
+#' Delete a User
 #'
-#' @description Removes user from app_users and app_user_roles
+#' Removes the user from `app_users`.
+#' All associated roles in `app_user_roles` are deleted automatically due to
+#' `ON DELETE CASCADE`.
+#'
+#' @param pool A DBI connection pool.
+#' @param username Character. Username to delete.
+#' @param confirm Logical. Must be TRUE to proceed.
+#'
+#' @return Invisible list with deletion status.
 #'
 #' @export
-delete_user <- function(pool, pameval_user, confirm = FALSE) {
+delete_user <- function(pool, username, confirm = FALSE) {
 
-  if(!confirm) {
-    stop("Set confirm = TRUE to delete user '", pameval_user, "'")
-  }
+  if (!confirm)
+    stop("Set confirm = TRUE to delete user '", username, "'.")
 
-  user_exists <- tryCatch({
-    result <- DBI::dbGetQuery(
-      pool,
-      "SELECT COUNT(*) as count FROM app_users WHERE pameval_user = $1",
-      params = list(pameval_user)
-    )
-    result$count[1] > 0
-  }, error = function(e) {
-    stop("Failed to check if user exists: ", e$message)
-  })
+  # Fetch user_id
+  user_row <- DBI::dbGetQuery(
+    pool,
+    "SELECT user_id FROM app_users WHERE username = $1",
+    params = list(username)
+  )
 
-  if(!user_exists) {
-    message("User '", pameval_user, "' does not exist")
+  if (nrow(user_row) == 0)
     return(invisible(list(success = FALSE, message = "User not found")))
-  }
+
+  user_id <- user_row$user_id
 
   tryCatch({
     pool::poolWithTransaction(pool, function(conn) {
-      # Delete from app_user_roles first (foreign key constraint)
+      # CASCADE will delete roles automatically
       DBI::dbExecute(
         conn,
-        "DELETE FROM app_user_roles WHERE pameval_user = $1",
-        params = list(pameval_user)
-      )
-
-      # Delete from app_users
-      DBI::dbExecute(
-        conn,
-        "DELETE FROM app_users WHERE pameval_user = $1",
-        params = list(pameval_user)
+        "DELETE FROM app_users WHERE user_id = $1",
+        params = list(user_id)
       )
     })
 
-    message("✓ User '", pameval_user, "' deleted successfully")
-
-    return(invisible(list(success = TRUE, user = pameval_user)))
+    invisible(list(success = TRUE, user = username))
 
   }, error = function(e) {
     stop("Failed to delete user: ", e$message)
@@ -266,22 +281,39 @@ delete_user <- function(pool, pameval_user, confirm = FALSE) {
 }
 
 
-#' List all users
+
+#' List All Users With Roles
 #'
-#' @description Returns all users with their roles and active status
+#' Returns a joined table of:
+#' - usernames
+#' - names
+#' - email
+#' - active flag
+#' - expire_date
+#' - created_at timestamp
+#' - assigned PostgreSQL roles
+#'
+#' @param pool A DBI connection pool.
+#'
+#' @return A data frame of all users and their roles.
 #'
 #' @export
 list_users <- function(pool) {
   tryCatch({
     DBI::dbGetQuery(pool, "
       SELECT
-        u.pameval_user,
+        u.user_id,
+        u.username,
+        u.first_name,
+        u.last_name,
+        u.email,
         u.active,
-        r.pg_role,
-        u.created_at
+        u.expire_date,
+        u.created_at,
+        r.pg_role
       FROM app_users u
-      LEFT JOIN app_user_roles r ON u.pameval_user = r.pameval_user
-      ORDER BY u.pameval_user
+      LEFT JOIN app_user_roles r ON u.user_id = r.user_id
+      ORDER BY u.username
     ")
   }, error = function(e) {
     stop("Failed to list users: ", e$message)

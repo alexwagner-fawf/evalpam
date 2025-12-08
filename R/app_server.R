@@ -116,7 +116,7 @@ app_server <- function(input, output, session) {
       ) |>
       dplyr::mutate(
         timestamp = lubridate::now(),
-        verification_by = res_auth$user
+        verification_by = res_auth$user_id
       )
 
     # Append to EXPORT_FILE
@@ -157,7 +157,7 @@ app_server <- function(input, output, session) {
 
   # ---- Output: Username ----
   output$user_info <- renderUI({
-    tags$h3(paste0("Hallo ", res_auth$user, "!"))
+    tags$h3(paste0("Hallo ", res_auth$first_name, "!"))
   })
 
   # ---- Output: Warning ----

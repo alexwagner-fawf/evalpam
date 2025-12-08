@@ -12,7 +12,7 @@ test_that("check_credentials_db() validates credentials correctly", {
     host     = get_golem_config("pg_host"),
     port     = get_golem_config("pg_port"),
     dbname   = get_golem_config("pg_dbname"),
-    password = Sys.getenv("evalpam_pw")
+    password = rawToChar(base64enc::base64decode(Sys.getenv("evalpam_pw")))
   )
 
   # Create temporary test table
