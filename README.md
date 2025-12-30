@@ -39,6 +39,9 @@ evalpam:::setup_app(user = "postgres",
                      renviron_dir = NULL)
 ```
 
+<img width="1319" height="1668" alt="Untitled" src="https://github.com/user-attachments/assets/5520ab8f-b296-4c68-8521-49a14342444b" />
+
+
 # Adding users
 After setting up the app and the database, you can add users to the database. The passwords will be stored in database tables encrypted with salt (bcrypt). 
 
