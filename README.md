@@ -39,7 +39,7 @@ evalpam:::setup_app(user = "postgres",
                      renviron_dir = NULL)
 ```
 
-<img width="1319" height="1668" alt="Untitled" src="https://github.com/user-attachments/assets/5520ab8f-b296-4c68-8521-49a14342444b" />
+<img width="2004" height="1293" alt="Bildschirmfoto vom 2025-12-30 15-15-01" src="https://github.com/user-attachments/assets/d6217f06-199d-4105-a1e9-b0888105f522" />
 
 
 # Adding users
