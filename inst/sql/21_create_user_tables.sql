@@ -11,7 +11,6 @@ CREATE TABLE app_users (
   expire_date DATE DEFAULT NULL
 );
 
-
 DROP TABLE IF EXISTS app_user_roles;
 CREATE TABLE app_user_roles (
   user_id BIGINT REFERENCES app_users(user_id) ON DELETE CASCADE,

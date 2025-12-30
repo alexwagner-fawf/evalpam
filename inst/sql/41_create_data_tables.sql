@@ -1,20 +1,46 @@
 
+-- Table: import.projects
+
+-- DROP TABLE IF EXISTS import.projects;
+
+CREATE SEQUENCE IF NOT EXISTS import.projects_id_seq;
+CREATE TABLE IF NOT EXISTS import.projects
+(
+    project_id integer NOT NULL DEFAULT nextval('import.projects_id_seq'::regclass),
+    project_name_short character varying(30) COLLATE pg_catalog."default",
+    project_name_long character varying(150) COLLATE pg_catalog."default",
+    description text,
+    contact character varying(100),
+    organisation character varying(100),
+    created_at timestamptz DEFAULT NOW(),
+    CONSTRAINT projects_pkey PRIMARY KEY (project_id)
+);
+
 -- Table: import.deployments
 
 -- DROP TABLE IF EXISTS import.deployments;
 
+CREATE SEQUENCE IF NOT EXISTS import.deployments_id_seq;
 CREATE TABLE IF NOT EXISTS import.deployments
 (
-    deployment_id character varying(8) COLLATE pg_catalog."default" NOT NULL,
+    deployment_id bigint NOT NULL DEFAULT nextval('import.deployments_id_seq'::regclass),
+    project_id integer NOT NULL,
     deployment_name character varying(99) COLLATE pg_catalog."default",
     deployment_path text COLLATE pg_catalog."default",
     start_datetime timestamptz,
     end_datetime timestamptz,
     device_manufacturer character varying(99),
     device_modelname character varying(99),
+    valid boolean NOT NULL,
+    notes text,
     geometry geometry (Point,4326),
     created_at timestamptz DEFAULT NOW(),
-    CONSTRAINT deployments_pkey PRIMARY KEY (deployment_id)
+    CONSTRAINT deployments_pkey PRIMARY KEY (deployment_id),
+    CONSTRAINT deployments_project_id_fkey FOREIGN KEY (project_id)
+    REFERENCES import.projects (project_id) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE NO ACTION
+    NOT VALID
 );
 
 
@@ -48,7 +74,7 @@ CREATE SEQUENCE IF NOT EXISTS import.audio_file_id_seq;
 CREATE TABLE IF NOT EXISTS import.audio_files
 (
     audio_file_id bigint NOT NULL DEFAULT nextval('import.audio_file_id_seq'::regclass),
-    deployment_id character varying(8) NOT NULL COLLATE pg_catalog."default",
+    deployment_id bigint NOT NULL,
     sample_rate bigint NOT NULL,
     relative_path character varying(120) COLLATE pg_catalog."default",
     timestamp_start timestamptz,
