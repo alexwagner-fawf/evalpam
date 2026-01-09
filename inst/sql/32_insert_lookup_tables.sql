@@ -1,6 +1,6 @@
 -- INSERT SPECIES CODES in public.lut_species_code
 
-INSERT INTO public.lut_species_code (species_scientific, species_de, species_en)
+INSERT INTO public.lut_species_code (species_scientific, species_long_de, species_long_en)
 VALUES
 ('Abroscopus albogularis', 'Rostwangen-Dickichtsänger', 'Rufous-faced Warbler'),
 ('Abroscopus schisticeps', 'Schieferkopf-Dickichtsänger', 'Black-faced Warbler'),
