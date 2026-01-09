@@ -1,3 +1,20 @@
-CREATE USER  {`DB_EVALPAM_USER`} WITH PASSWORD {DB_PASSWORD_EVALPAM_USER};
+-- 1. User erstellen
+-- Wir nutzen den Platzhalter, damit der Name aus der R-Funktion übernommen wird.
+CREATE USER {`DB_EVALPAM_USER`} WITH PASSWORD {DB_PASSWORD_EVALPAM_USER};
+
+-- 2. Verbindung zur Datenbank erlauben
 GRANT CONNECT ON DATABASE evalpam_db TO {`DB_EVALPAM_USER`};
-GRANT evalpam_birder, evalpam_admin TO  {`DB_EVALPAM_USER`};
+
+-- 3. Rollen zuweisen (Admin & Birder Rollen, falls du die nutzt)
+GRANT evalpam_birder, evalpam_admin TO {`DB_EVALPAM_USER`};
+
+-- 4. WICHTIG: Zugriffsrechte auf Schemata (Dynamisch!)
+-- Schema IMPORT
+GRANT USAGE ON SCHEMA import TO {`DB_EVALPAM_USER`};
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA import TO {`DB_EVALPAM_USER`};
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA import TO {`DB_EVALPAM_USER`};
+
+-- Schema PUBLIC
+GRANT USAGE ON SCHEMA public TO {`DB_EVALPAM_USER`};
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {`DB_EVALPAM_USER`};
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {`DB_EVALPAM_USER`};

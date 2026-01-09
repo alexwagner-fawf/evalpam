@@ -1,5 +1,5 @@
 REVOKE evalpam_birder, evalpam_admin FROM {`DB_EVALPAM_USER`};
-REVOKE SELECT ON public.app_users FROM evalpam_user;
+-- REVOKE SELECT ON public.app_users FROM evalpam_user;
 DROP USER IF EXISTS {`DB_EVALPAM_USER`};
 DROP ROLE IF EXISTS evalpam_birder;
 DROP ROLE IF EXISTS evalpam_admin;

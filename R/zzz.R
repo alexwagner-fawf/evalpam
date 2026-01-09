@@ -1,3 +1,3 @@
 .onLoad <- function(libname, pkgname) {
-  evalpam:::data_setup()
+  #evalpam:::data_setup()
 }

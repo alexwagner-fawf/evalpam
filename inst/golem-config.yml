@@ -2,12 +2,12 @@ default:
   golem_name: evalpam
   golem_version: 0.0.0.9000
   app_prod: no
-  pg_host: localhost
+  pg_host: fvafrsd-6v.forst.bwl.de
   pg_port: 5432.0
   pg_dbname: evalpam_db
   pg_user: evalpam_user
-  admin_mailaddress: emailaddress_required
+  admin_mailaddress: emailaddress@required.com
 production:
   app_prod: yes
 dev:
-  golem_wd: !expr golem::pkg_path()
+  golem_wd: golem::pkg_path()

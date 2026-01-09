@@ -1,21 +1,17 @@
 #' The application User-Interface
 #'
 #' @param request Internal parameter for `{shiny}`.
-#'     DO NOT REMOVE.
 #' @import shiny
 #' @noRd
 app_ui <- function(request) {
 
-  data <- getOption("evalpam.data")
-  mylist <- data$mylist
-  arten  <- data$arten
+  # HINWEIS: Wir laden hier KEINE Daten mehr über getOption!
+  # Die Dropdowns werden leer initialisiert und vom Server befüllt.
 
   ui <- tagList(
-    # Leave this function for adding external resources
     golem_add_external_resources(),
-    # Your application UI logic
-    fluidPage(
 
+    fluidPage(
       titlePanel("Vogelstimmen-Verifikation"),
 
       sidebarLayout(
@@ -23,32 +19,30 @@ app_ui <- function(request) {
         # Sidebar ----
         sidebarPanel(
           width = 4,
-          # User Info
-          uiOutput("user_info"),
 
-          # Sequence Selection
+          # 1. User Info & Projekt Auswahl
+          uiOutput("user_info"),
+          uiOutput("project_selector_ui"),
+          hr(),
+
+          # 2. Sequence Selection
           selectizeInput(
             "seq",
-
             "Sequenz:",
-            choices = mylist,
+            choices = character(0), # WICHTIG: Leerer Vektor statt NULL
             options = list(maxOptions = 10000)
           ),
-          # Warning Text
+
           textOutput('text1'),
-          tags$head(tags$style("#text1{
-        color: red;
-        font-size: 16px;
-        font-style: italic;
-      }")),
+          tags$head(tags$style("#text1{ color: red; font-size: 16px; font-style: italic; }")),
 
           br(),
-          # Species Selection
+
+          # 3. Species Selection
           shinyWidgets::multiInput(
             inputId = "inSelect",
             label = "Vogelarten:",
-            choices = arten,
-            selected = NULL,
+            choices = character(0), # WICHTIG: Leerer Vektor statt NULL
             width = "100%",
             options = list(
               enable_search = TRUE,
@@ -57,13 +51,11 @@ app_ui <- function(request) {
             )
           ),
 
-          # BirdNET Predictions Table
           h4("BirdNET Vorhersagen:"),
           DT::DTOutput('table_bnet'),
 
           br(),
 
-          # Plot Info and Map
           fluidRow(
             column(6, uiOutput("plot_info")),
             column(6, uiOutput("map"))
@@ -71,10 +63,9 @@ app_ui <- function(request) {
 
           br(),
 
-          # Save Button
           actionButton(
             "add_btn",
-            "Speichern",
+            "Speichern & Weiter",
             icon = icon("paper-plane"),
             style = "color: #fff; background-color: #337ab7; border-color: #2e6da4; width: 100%;"
           )
@@ -83,9 +74,7 @@ app_ui <- function(request) {
         # Main Panel ----
         mainPanel(
           width = 8,
-
           h2("Spektrogramm"),
-
           video::video(
             elementId = "video",
             files = NULL
@@ -98,23 +87,24 @@ app_ui <- function(request) {
 
 #' Add external Resources to the Application
 #'
-#' This function is internally used to add external
-#' resources inside the Shiny application.
-#'
 #' @import shiny
 #' @importFrom golem add_resource_path activate_js favicon bundle_resources
 #' @noRd
 golem_add_external_resources <- function() {
-  add_resource_path( "www", app_sys("app/www") )
-  add_resource_path("spectograms", Sys.getenv("spectogram_folder"))
 
-    tags$head(
-      favicon(),
-      bundle_resources(
-        path = app_sys("app/www"),
-        app_title = "evalpam"
-      )
-    # Add here other external resources
-    # for example, you can add shinyalert::useShinyalert()
+  add_resource_path("www", app_sys("app/www"))
+
+  # Audio-Ordner einbinden
+  spec_path <- Sys.getenv("spectogram_folder")
+  if(spec_path != "" && dir.exists(spec_path)) {
+    add_resource_path("spectograms", spec_path)
+  }
+
+  tags$head(
+    favicon(),
+    bundle_resources(
+      path = app_sys("app/www"),
+      app_title = "evalpam"
+    )
   )
 }

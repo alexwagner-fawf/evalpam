@@ -15,6 +15,7 @@ setup_app <- function(user = "postgres",
                      evalpam_dbname = "evalpam_db",
                      admin_mailaddress = "emailaddress_required",
                      initialize_db = FALSE,
+                     dummy = FALSE,
                      renviron_dir = NULL) {
 
   pool <- set_db_pool(user = user,
@@ -82,7 +83,8 @@ setup_app <- function(user = "postgres",
              port = port,
              evalpam_dbname = evalpam_dbname,
              password = password,
-             config = config)
+             config = config,
+             dummy = dummy)
   }
 
 
@@ -95,7 +97,7 @@ setup_app <- function(user = "postgres",
 
 
 
-setup_db <- function(user, host, port, evalpam_dbname, password, pool, config){
+setup_db <- function(user, host, port, evalpam_dbname, password, pool, config, dummy){
 
   sql_dir <- app_sys("sql")
 
@@ -109,6 +111,17 @@ setup_db <- function(user, host, port, evalpam_dbname, password, pool, config){
   if (sql_dir == "") {
     stop("No SQL directory found in package. Expected /inst/sql.")
   }
+
+  if (!dummy) {
+    # Wenn dummy = FALSE, schmeissen wir die Datei '99_seed_dummy_data.sql' raus.
+    # Wir filtern nach Dateinamen, die NICHT mit "99" anfangen.
+    sql_files <- sql_files[!grepl("99_seed_dummy_data\\.sql$", sql_files)]
+
+    message("Info: Dummy-Daten (99_seed_dummy_data.sql) werden übersprungen.")
+  } else {
+    message("Info: Dummy-Modus aktiv! Testdaten werden geladen.")
+  }
+
 
   for(sql_file in sql_files){
     message("============================")
