@@ -26,7 +26,9 @@ setup_app <- function(user = "postgres",
 
 
   on.exit({
-    pool::poolClose(pool)
+    if (pool::dbIsValid(pool)) {
+      pool::poolClose(pool)
+    }
   })
 
   if(!"Pool" %in% S3Class(pool)){
@@ -89,7 +91,7 @@ setup_app <- function(user = "postgres",
 
 
   # test connection with config
-  pool::poolClose(pool)
+
   pool <- set_db_pool(fail_with_error = TRUE)
 
 
