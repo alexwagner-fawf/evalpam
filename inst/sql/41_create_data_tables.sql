@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS import.audio_files (
     relative_path character varying(120),
     timestamp_start timestamptz NOT NULL,
     duration_s int NOT NULL,
+    deleted boolean,
     required_annotation_type_id integer REFERENCES public.lut_annotation_type_code(annotation_type_id),
 
     created_at timestamptz DEFAULT NOW(),
@@ -79,7 +80,7 @@ CREATE TABLE IF NOT EXISTS import.results (
     end_time_s numeric(6,1),
     confidence double precision,
     species_id integer NOT NULL,
-    behavior_id int,
+    behavior_id integer,
     created_at timestamptz DEFAULT NOW(),
     CONSTRAINT results_pkey PRIMARY KEY (result_id),
     CONSTRAINT results_settings_id_fkey FOREIGN KEY (settings_id) REFERENCES import.settings (settings_id),
