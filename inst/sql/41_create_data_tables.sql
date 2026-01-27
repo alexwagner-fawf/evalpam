@@ -62,7 +62,6 @@ CREATE TABLE IF NOT EXISTS import.audio_files (
     duration_s int NOT NULL,
     deleted boolean,
     required_annotation_type_id integer REFERENCES public.lut_annotation_type_code(annotation_type_id),
-
     created_at timestamptz DEFAULT NOW(),
     CONSTRAINT audio_files_pkey PRIMARY KEY (audio_file_id),
     CONSTRAINT audio_files_deployment_fkey FOREIGN KEY (deployment_id) REFERENCES import.deployments (deployment_id),
