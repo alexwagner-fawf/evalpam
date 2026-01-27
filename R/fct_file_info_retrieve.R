@@ -98,6 +98,8 @@ retrieve_local_file_info <- function(project_id,
                                      force_exif = FALSE,
                                      default_required_annotation_type_id = 3){
 
+  project_folder <- normalizePath(project_folder, winslash = "/", mustWork = FALSE)
+
   stopifnot(dir.exists(project_folder))
   stopifnot(is.numeric(folder_depth) && folder_depth > 0)
   stopifnot(is.numeric(project_id))
@@ -161,7 +163,8 @@ retrieve_local_file_info <- function(project_id,
         tags = c("SourceFile", "SampleRate", "FileModifyDate", "Duration", "CreateDate", "MediaCreateDate"),
         quiet = TRUE
       ) |>
-        dplyr::mutate(SourceFile = stringr::str_remove_all(SourceFile, project_folder)) |>
+        dplyr::mutate(SourceFile = normalizePath(SourceFile, winslash = "/", mustWork = FALSE)) |>
+        dplyr::mutate(SourceFile = stringr::str_remove_all(SourceFile, dir)) |>
         dplyr::rename(relative_path = SourceFile) |>
         dplyr::rename(sample_rate = SampleRate) |>
         dplyr::rename(duration_s = Duration) |>

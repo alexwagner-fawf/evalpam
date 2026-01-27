@@ -103,7 +103,10 @@ apply_birdnet_model <- function(audio_file = list.files(system.file("extdata", p
   )
 
   birdnet_setup$prediction_raw <- prediction_raw
+  birdnet_setup$params <- params
 
+  birdnet_setup$species <- NULL
+  birdnet_setup$model <- NULL
 
   return(birdnet_setup)
   }
