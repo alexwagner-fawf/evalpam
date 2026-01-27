@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS import.deployments (
     geometry geometry (Point,4326),
     created_at timestamptz DEFAULT NOW(),
     CONSTRAINT deployments_pkey PRIMARY KEY (deployment_id),
+    CONSTRAINT deployments_unique_name UNIQUE (deployment_name),
     CONSTRAINT deployments_project_id_fkey FOREIGN KEY (project_id) REFERENCES import.projects (project_id)
 );
 
