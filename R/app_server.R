@@ -130,8 +130,8 @@ app_server <- function(input, output, session, pool) {
       SELECT
         r.result_id,
         r.confidence as score,
-        r.begin_time_s as start,
-        r.end_time_s as end_sec,
+        r.begin_time_ms as start,
+        r.end_time_ms as end_sec,
         af.relative_path as path,
         af.audio_file_id,
         af.required_annotation_type_id,   -- The fixed mode required for this file
@@ -145,7 +145,7 @@ app_server <- function(input, output, session, pool) {
       JOIN public.lut_species_code sp ON r.species_id = sp.species_id
       LEFT JOIN public.lut_annotation_type_code lt ON af.required_annotation_type_id = lt.annotation_type_id
       WHERE d.project_id = $1
-      ORDER BY af.relative_path, r.begin_time_s
+      ORDER BY af.relative_path, r.begin_time_ms
     "
     # Note: For production with massive data, consider pagination or LIMIT
     DBI::dbGetQuery(pool, query, params = list(input$selected_project))
@@ -449,7 +449,7 @@ app_server <- function(input, output, session, pool) {
             if(length(sid) > 0) {
               insert_q <- "
                   INSERT INTO import.ground_truth_annotations
-                  (audio_file_id, user_id, species_id, behavior_id, begin_time_s, end_time_s, is_present)
+                  (audio_file_id, user_id, species_id, behavior_id, begin_time_ms, end_time_ms, is_present)
                   VALUES ($1, $2, $3, $4, $5, $6, TRUE)
                 "
               DBI::dbExecute(conn, insert_q, params = list(
@@ -460,7 +460,7 @@ app_server <- function(input, output, session, pool) {
         }
 
         # --- STEP 3: Insert Annotation Status (Mandatory) ---
-        status_q <- "INSERT INTO import.annotation_status (audio_file_id, user_id, begin_time_s, end_time_s, annotation_type_id) VALUES ($1, $2, $3, $4, $5)"
+        status_q <- "INSERT INTO import.annotation_status (audio_file_id, user_id, begin_time_ms, end_time_ms, annotation_type_id) VALUES ($1, $2, $3, $4, $5)"
         DBI::dbExecute(conn, status_q, params = list(aid, res_auth$user_id, start_time, end_time, fixed_type_id))
 
       }) # End Transaction

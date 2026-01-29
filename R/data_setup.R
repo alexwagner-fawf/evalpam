@@ -41,8 +41,8 @@ data_setup <- function(pool) {
   meta_data <- meta_data_db |>
     dplyr::mutate(
       prediction = species_long_de,     # oder species_short
-      start = begin_time_s,
-      end = end_time_s,
+      start = begin_time_ms,
+      end = end_time_ms,
       species_to_check = "TODO",        # Das müsstest du definieren (wo kommt das her?)
       score = confidence,
       id_seq = as.character(audio_file_id),

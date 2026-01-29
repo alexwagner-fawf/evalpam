@@ -107,7 +107,7 @@ for(i in seq(nrow(audio_files))){
     dplyr::mutate(settings_id = new_settings_id) |>
     dplyr::left_join(possible_species_df) |>
     dplyr::mutate(behavior_id = NA_integer_) |>
-    dplyr::mutate(confidence = as.integer(round(confidence * 1000))) |>
+    dplyr::mutate(confidence = as.integer(round(confidence * 10000))) |>
     dplyr::select(audio_file_id, settings_id, begin_time_ms, end_time_ms, confidence, species_id, behavior_id)
 }
 
