@@ -327,3 +327,73 @@ upsert_audio_files_df <- function(conn, df_audio, update_if_exists = TRUE) {
   result <- DBI::dbGetQuery(conn, sql)
   return(result$audio_file_id)
 }
+
+
+#' Upsert results into import.results from a data.frame
+#'
+#' @param conn A valid DBI pool connection
+#' @param df_results data.frame with columns:
+#'        audio_file_id, settings_id, begin_time_ms, end_time_ms,
+#'        confidence, species_id, behavior_id
+#' @param update_if_exists Logical. If TRUE, will update rows matching unique constraint
+#'
+#' @return A vector of result_id for inserted/updated rows
+upsert_results_df <- function(conn, df_results, update_if_exists = TRUE) {
+  stopifnot(is.data.frame(df_results))
+
+  # Required columns
+  required_cols <- c("audio_file_id", "settings_id", "begin_time_ms",
+                     "end_time_ms", "confidence", "species_id")
+  missing_cols <- setdiff(required_cols, names(df_results))
+  if (length(missing_cols) > 0) {
+    stop("Missing required columns: ", paste(missing_cols, collapse = ", "))
+  }
+
+  # Add optional column behavior_id if missing
+  if (!"behavior_id" %in% names(df_results)) {
+    df_results$behavior_id <- NA_integer_
+  }
+
+  # Select only columns we care about
+  cols_to_use <- c("audio_file_id", "settings_id", "begin_time_ms",
+                   "end_time_ms", "confidence", "species_id", "behavior_id")
+  df_temp <- df_results[, cols_to_use, drop = FALSE]
+
+  # Write to temporary table
+  DBI::dbWriteTable(conn, "temp_results",
+                    df_temp, temporary = TRUE, overwrite = TRUE)
+
+  if (update_if_exists) {
+    # UPSERT: insert new, update existing based on unique constraint
+    sql <- "
+      INSERT INTO import.results
+        (audio_file_id, settings_id, begin_time_ms, end_time_ms,
+         confidence, species_id, behavior_id)
+      SELECT
+        audio_file_id, settings_id, begin_time_ms, end_time_ms,
+        confidence, species_id, behavior_id
+      FROM temp_results
+      ON CONFLICT (audio_file_id, settings_id, begin_time_ms, end_time_ms, species_id)
+      DO UPDATE SET
+        begin_time_ms = EXCLUDED.begin_time_ms,
+        end_time_ms = EXCLUDED.end_time_ms,
+        confidence = EXCLUDED.confidence,
+        behavior_id = EXCLUDED.behavior_id
+      RETURNING result_id;"
+  } else {
+    # INSERT only
+    sql <- "
+      INSERT INTO import.results
+        (audio_file_id, settings_id, begin_time_ms, end_time_ms,
+         confidence, species_id, behavior_id)
+      SELECT
+        audio_file_id, settings_id, begin_time_ms, end_time_ms,
+        confidence, species_id, behavior_id
+      FROM temp_results
+      RETURNING result_id;"
+  }
+
+  result <- DBI::dbGetQuery(conn, sql)
+  return(result$result_id)
+}
+
