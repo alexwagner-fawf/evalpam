@@ -76,12 +76,14 @@ CREATE TABLE IF NOT EXISTS import.results (
     result_id bigint NOT NULL DEFAULT nextval('import.results_data_id_seq'::regclass),
     audio_file_id bigint NOT NULL,
     settings_id bigint NOT NULL,
-    begin_time_s numeric(6,1),
-    end_time_s numeric(6,1),
-    confidence double precision,
+    begin_time_ms integer NOT NULL,
+    end_time_ms integer NOT NULL,
+    -- confidence will be converted by round(confidence * 1000) and back-converted by confidence / 1000
+    confidence smallint,
     species_id integer NOT NULL,
     behavior_id integer,
     created_at timestamptz DEFAULT NOW(),
+    CONSTRAINT results_unique_entry UNIQUE(audio_file_id, settings_id, begin_time_ms, end_time_ms, species_id),
     CONSTRAINT results_pkey PRIMARY KEY (result_id),
     CONSTRAINT results_settings_id_fkey FOREIGN KEY (settings_id) REFERENCES import.settings (settings_id),
     CONSTRAINT results_audio_file_id_fkey FOREIGN KEY (audio_file_id) REFERENCES import.audio_files (audio_file_id),
@@ -90,6 +92,7 @@ CREATE TABLE IF NOT EXISTS import.results (
 );
 CREATE INDEX ON import.results (audio_file_id);
 CREATE INDEX ON import.results (species_id);
+CREATE UNIQUE INDEX ON import.results (audio_file_id, settings_id, begin_time_ms, end_time_ms, species_id);
 
 -- 6. SPECTROGRAMS
 CREATE SEQUENCE IF NOT EXISTS import.spectrogram_data_id_seq;
@@ -120,8 +123,8 @@ CREATE TABLE IF NOT EXISTS import.annotation_status (
     status_id bigint NOT NULL DEFAULT nextval('import.annotation_status_data_id_seq'::regclass),
     audio_file_id bigint NOT NULL,
     user_id bigint NOT NULL,
-    begin_time_s numeric(6,1) NOT NULL,
-    end_time_s numeric(6,1) NOT NULL,
+    begin_time_ms integer NOT NULL,
+    end_time_ms integer NOT NULL,
     annotation_type_id integer NOT NULL,
     target_species_id integer,
     created_at timestamptz DEFAULT NOW(),
@@ -133,13 +136,13 @@ CREATE TABLE IF NOT EXISTS import.annotation_status (
     CONSTRAINT annotation_status_target_species_id_fkey FOREIGN KEY (target_species_id) REFERENCES public.lut_species_code (species_id),
 
     -- Constraint: Zeit muss logisch sein
-    CONSTRAINT check_valid_status_time CHECK (begin_time_s < end_time_s),
+    CONSTRAINT check_valid_status_time CHECK (begin_time_ms < end_time_ms),
 
     -- >> STRENGER CONSTRAINT (Strict Locking) <<
     -- Keine Überlappung erlaubt, egal welcher User. Single Source of Truth.
     CONSTRAINT no_status_overlap_global EXCLUDE USING GIST (
         audio_file_id WITH =,
-        numrange(begin_time_s, end_time_s) WITH &&
+        int4range(begin_time_ms, end_time_ms) WITH &&
     )
 );
 CREATE INDEX ON import.annotation_status (audio_file_id);
@@ -152,8 +155,8 @@ CREATE TABLE IF NOT EXISTS import.ground_truth_annotations (
     audio_file_id bigint NOT NULL,
     user_id integer NOT NULL,
     species_id integer NOT NULL,
-    begin_time_s numeric(6,1) NOT NULL,
-    end_time_s numeric(6,1) NOT NULL,
+    begin_time_ms integer NOT NULL,
+    end_time_ms integer NOT NULL,
     is_present boolean NOT NULL DEFAULT TRUE,
     behavior_id integer,
     created_at timestamptz DEFAULT NOW(),
@@ -165,7 +168,7 @@ CREATE TABLE IF NOT EXISTS import.ground_truth_annotations (
     CONSTRAINT ground_truth_behavior_fkey FOREIGN KEY (behavior_id) REFERENCES public.lut_behavior_code (behavior_id),
 
     -- Constraint: Zeit muss positiv sein
-    CONSTRAINT check_valid_gt_time CHECK (begin_time_s < end_time_s),
+    CONSTRAINT check_valid_gt_time CHECK (begin_time_ms < end_time_ms),
 
     -- >> STRENGER CONSTRAINT (Strict Locking) <<
     -- Verhindert doppelte Arten zur gleichen Zeit in der gleichen Datei.
@@ -173,7 +176,7 @@ CREATE TABLE IF NOT EXISTS import.ground_truth_annotations (
     CONSTRAINT no_duplicate_species_overlap_global EXCLUDE USING GIST (
         audio_file_id WITH =,
         species_id WITH =,
-        numrange(begin_time_s, end_time_s) WITH &&
+        int4range(begin_time_ms, end_time_ms) WITH &&
     )
 );
 CREATE INDEX ON import.ground_truth_annotations (audio_file_id);
