@@ -1,3 +1,8 @@
+
+# where are the audio files stored?
+project_folder = "~/Dokumente/sound_db/project_1/"
+
+
 pool <- set_db_pool()
 
 project_id <- upsert_project(pool,
@@ -8,11 +13,11 @@ project_id <- upsert_project(pool,
                              organisation = "123")
 
 out <- retrieve_local_file_info(project_id,
-                                project_folder = "~/Dokumente/sound_db/project_1/",
+                                project_folder = project_folder,
                                 folder_depth = 1)
 
 # WARNING!!! THIS WILL INJECT RANDOM COORDINATES ATM
-
+# the local the deployment index csv can be updated with values
 deployment_ids <- out$deployment_index |>
   readr::read_csv() |>
   dplyr::mutate(geometry_x_4326 = runif(dplyr::n(), 7, 8)) |>
