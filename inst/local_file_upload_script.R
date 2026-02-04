@@ -11,10 +11,12 @@ out <- retrieve_local_file_info(project_id,
                                 project_folder = "~/Dokumente/sound_db/project_1/",
                                 folder_depth = 1)
 
+# WARNING!!! THIS WILL INJECT RANDOM COORDINATES ATM
+
 deployment_ids <- out$deployment_index |>
   readr::read_csv() |>
-  dplyr::mutate(geometry_x_4326 = runif(dplyr::n(), 0, 10)) |>
-  dplyr::mutate(geometry_y_4326 = runif(dplyr::n(), 40, 50)) |>
+  dplyr::mutate(geometry_x_4326 = runif(dplyr::n(), 7, 8)) |>
+  dplyr::mutate(geometry_y_4326 = runif(dplyr::n(), 48, 50)) |>
   dplyr::mutate(valid = TRUE) |>
   sf::st_as_sf(coords = c("geometry_x_4326", "geometry_y_4326")) |>
   sf::st_set_crs(4326) |>
@@ -22,8 +24,7 @@ deployment_ids <- out$deployment_index |>
 
 # check the uploaded data
 deployments <- dplyr::tbl(pool, DBI::Id("import", "deployments")) |>
-  dplyr::filter(.data$project_id == !!project_id &
-                  deployment_id %in% deployment_ids) |>
+  dplyr::filter(deployment_id %in% deployment_ids) |>
   dplyr::collect()
 
 
@@ -47,6 +48,7 @@ df <- out$all_audio_file_indices |>
   dplyr::left_join(deployments |> dplyr::select(deployment_id, deployment_name)) |>
   dplyr::relocate(deployment_id, .before = "deployment_name") |>
   dplyr::select(-deployment_name)
+
 
 # upload audio file indices, retrieve ids of upload
 audio_file_ids <- upsert_audio_files_df(conn = pool,

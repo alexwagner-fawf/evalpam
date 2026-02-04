@@ -15,6 +15,7 @@
 #' @param birdnet_params_list List. Optional parameters to override BirdNET defaults.
 #' @param verbose Logical. Print progress messages.
 #' @param internal_pool DBI pool object. If NULL, a new pool will be created.
+#' @param coordinates_decimal_places integer, number of decimal places for epsg4326 coordinates (only 1 or 2 decimal places are meaningful, 2 may lead to more fine grained species filters but 1 should be enough and reduce the number of settings in the database)
 #'
 #' @return Data frame of BirdNET inference results.
 #' @export
@@ -25,7 +26,8 @@ process_deployment_birdnet <- function(deployment_id,
                                occurence_min_confidence,
                                birdnet_params_list = list(),
                                verbose = TRUE,
-                               internal_pool = NULL) {
+                               internal_pool = NULL,
+                               coordinates_decimal_places = 1L) {
   if(is.null(internal_pool)) internal_pool <- set_db_pool()
   on.exit(pool::poolClose(internal_pool), add = TRUE)
 
@@ -40,11 +42,11 @@ process_deployment_birdnet <- function(deployment_id,
     week <- unique(audio_files_subset$week)[week_i]
     if(week == -999) week <- NULL
 
-    model_info <- prepare_birdnet_model(dep_info$coordinates[2],
-                                        dep_info$coordinates[1],
-                                        week,
-                                        occurence_min_confidence,
-                                        birdnet_params_list)
+    model_info <- prepare_birdnet_model(latitude = round(dep_info$coordinates[2], coordinates_decimal_places),
+                                        longitude =  round(dep_info$coordinates[1], coordinates_decimal_places),
+                                        week =  week,
+                                        min_confidence = occurence_min_confidence,
+                                        birdnet_params_list = birdnet_params_list)
     bnm <- model_info$bnm
     birdnet_params <- model_info$birdnet_params
 
@@ -139,7 +141,9 @@ upsert_birdnet_settings <- function(pool, bnm, birdnet_params) {
 
   if(nrow(existing) == 0){
     new_settings_id <- upsert_settings_df(pool, settings)
-    replace_settings_species(conn = pool, settings_id = new_settings_id, species_id = birdnet_params$species_ids)
+    replace_settings_species(conn = pool,
+                             settings_id = as.integer(new_settings_id),
+                             species_id = as.integer(birdnet_params$species_ids))
   } else {
     new_settings_id <- existing$settings_id[1]
   }
