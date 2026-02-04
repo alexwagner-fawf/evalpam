@@ -49,43 +49,6 @@
 #'   \item FileModifyDate (from EXIF)
 #' }
 #'
-#' @examples
-#' \dontrun{
-#' # Basic usage with default settings
-#' retrieve_local_file_info(
-#'   project_id = 123,
-#'   project_folder = "/path/to/project"
-#' )
-#'
-#' # Parse timestamps from filenames with custom timezone
-#' retrieve_local_file_info(
-#'   project_id = 123,
-#'   project_folder = "/path/to/project",
-#'   folder_depth = 3,
-#'   force_tz = "America/Chicago"
-#' )
-#'
-#' # Use EXIF timestamps instead of filename parsing
-#' retrieve_local_file_info(
-#'   project_id = 123,
-#'   project_folder = "/path/to/project",
-#'   parse_datetime = FALSE
-#' )
-#'
-#' # Custom timestamp parsing function
-#' my_parser <- function(paths) {
-#'   # Extract timestamps from custom filename format
-#'   basename(paths) |>
-#'     stringr::str_extract("\\d{8}-\\d{6}") |>
-#'     strptime(format = "%Y%m%d-%H%M%S")
-#' }
-#'
-#' retrieve_local_file_info(
-#'   project_id = 123,
-#'   project_folder = "/path/to/project",
-#'   custom_parse_fun = my_parser
-#' )
-#' }
 #'
 #' @export
 
@@ -243,11 +206,19 @@ retrieve_local_file_info <- function(project_id,
       readr::write_csv(deployment_index_file)
   }
 
+  all_audio_file_indices = paste0(project_folder,
+                                  "/",
+                                  list.files(project_folder,
+                                             recursive = FALSE,
+                                             pattern = "_audio_file_index.csv"))
+
+
   return(
     list(
-      audio_file_indices = created_audio_file_indices,
+      new_audio_file_indices = created_audio_file_indices,
+      all_audio_file_indices = all_audio_file_indices,
       deployment_index = deployment_index_file
-    )
+      )
   )
 }
 
