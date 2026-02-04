@@ -31,7 +31,7 @@ ALTER SEQUENCE app_users_user_id_seq RESTART WITH 1;
 
 -- 1. Lookups erstellen (removed lookups as they are included by default)
 
--- now included in database setup - dummy values no longer needed
+-- lookup tables now included in database setup - dummy values no longer needed
 
 -- 2. App User
 INSERT INTO public.app_users (username, password_hash, first_name, last_name, email) VALUES
