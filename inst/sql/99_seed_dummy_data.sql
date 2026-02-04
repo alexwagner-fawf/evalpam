@@ -68,7 +68,7 @@ INSERT INTO import.settings_species (settings_id, species_id) VALUES
 -- 8. Predictions (Results)
 -- Wir fügen auch eine Prediction für Buchfink hinzu, um zu sehen, ob das System robust ist,
 -- auch wenn die Art eigentlich durch den Filter fallen würde (Edge Case).
-INSERT INTO import.results (audio_file_id, settings_id, begin_time_s, end_time_s, confidence, species_id) VALUES
-(1, 1, 0.0, 3.0, 0.95, 1),   -- Amsel (Erlaubt)
-(1, 1, 10.0, 13.0, 0.65, 2), -- Kohlmeise (Erlaubt)
-(2, 1, 5.0, 8.0, 0.88, 3);   -- Buchfink (Nicht auf Whitelist -> Testfall!)
+INSERT INTO import.results (audio_file_id, settings_id, begin_time_ms, end_time_ms, confidence, species_id) VALUES
+(1, 1, 0,    3000,  0.95, 1),    -- Amsel (0s bis 3s)
+(1, 1, 10000, 13000, 0.65, 2),   -- Kohlmeise (10s bis 13s)
+(2, 1, 5000,  8000,  0.88, 3);    -- Buchfink (5s bis 8s)

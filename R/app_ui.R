@@ -116,16 +116,22 @@ app_ui <- function(request) {
 golem_add_external_resources <- function() {
   add_resource_path("www", app_sys("app/www"))
 
-  spec_path <- Sys.getenv("spectogram_folder")
-  if(spec_path != "" && dir.exists(spec_path)) {
-    add_resource_path("spectograms", spec_path)
+  # --- FIX: Pfad sicherstellen ---
+  # 1. Versuche Umgebungsvariable
+  spec_path <- Sys.getenv("spectrogram_folder")
+
+  # 2. Wenn leer, nimm den lokalen Ordner im Projekt
+  if (spec_path == "") {
+    spec_path <- "spectrograms" # Oder der absolute Pfad: "C:/MeinProjekt/spectrograms"
   }
 
-  tags$head(
-    favicon(),
-    bundle_resources(
-      path = app_sys("app/www"),
-      app_title = "evalpam"
-    )
-  )
+  # 3. Prüfen und freigeben
+  if (dir.exists(spec_path)) {
+    add_resource_path("spectrograms", spec_path)
+  } else {
+    warning(paste("ACHTUNG: Spektrogramm-Ordner nicht gefunden unter:", spec_path))
+  }
+  # -------------------------------
+
+  tags$head(favicon(), bundle_resources(path = app_sys("app/www"), app_title = "evalpam"))
 }

@@ -5,4 +5,8 @@
 .DS_Store
 .quarto
 .Renviron
-spectograms/*
+
+*.wav
+spectrograms/
+temp_birdnet_results/
+*.mp4
