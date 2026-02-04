@@ -17,7 +17,7 @@ audio_file_id (optional, for updates)}
 \item{update_if_exists}{Logical. If TRUE, will update rows with audio_file_id.}
 }
 \value{
-A vector of audio_file_id for inserted/updated rows
+A vector of audio_file_id for inserted/updated rows#'
 }
 \description{
 Upsert audio files into import.audio_files from a data.frame
