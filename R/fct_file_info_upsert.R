@@ -9,6 +9,8 @@
 #' @param project_id Optional. If provided, will update that project; if NULL, will insert new
 #'
 #' @return The project_id of the inserted or updated project
+#'
+#' @export
 upsert_project <- function(conn,
                            project_name_short,
                            project_name_long,
@@ -63,6 +65,8 @@ upsert_project <- function(conn,
 #' @param update_if_exists Logical. If TRUE, will update rows where deployment_id exists.
 #'
 #' @return A vector of deployment_ids for inserted/updated rows
+#'
+#' @export
 upsert_deployments_sf <- function(conn, sf_deployments, update_if_exists = TRUE) {
   stopifnot("sf" %in% class(sf_deployments))
 
@@ -129,6 +133,8 @@ upsert_deployments_sf <- function(conn, sf_deployments, update_if_exists = TRUE)
 #'        Note: Since there's no UNIQUE constraint, this will always insert.
 #'
 #' @return A vector of settings_id for inserted rows
+#'
+#' @export
 upsert_settings_df <- function(conn, df_settings, update_if_exists = TRUE) {
   stopifnot(is.data.frame(df_settings))
 
@@ -255,7 +261,10 @@ replace_settings_species <- function(conn, settings_id, species_ids) {
 #'        audio_file_id (optional, for updates)
 #' @param update_if_exists Logical. If TRUE, will update rows with audio_file_id.
 #'
-#' @return A vector of audio_file_id for inserted/updated rows
+#' @return A vector of audio_file_id for inserted/updated rows#'
+#'
+#' @export
+
 upsert_audio_files_df <- function(conn, df_audio, update_if_exists = TRUE) {
   stopifnot(is.data.frame(df_audio))
 
@@ -338,6 +347,9 @@ upsert_audio_files_df <- function(conn, df_audio, update_if_exists = TRUE) {
 #' @param update_if_exists Logical. If TRUE, will update rows matching unique constraint
 #'
 #' @return A vector of result_id for inserted/updated rows
+#'
+#' @export
+
 upsert_results_df <- function(conn, df_results, update_if_exists = TRUE) {
   stopifnot(is.data.frame(df_results))
 

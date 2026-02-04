@@ -11,6 +11,7 @@
 #' @return A pool connection, FALSE if connection did not work. In running shiny session, a shinyalert will appear.
 #'
 #' @noRd
+#' @export
 set_db_pool <- function(user = NULL,
                         host = NULL,
                         port = NULL,
