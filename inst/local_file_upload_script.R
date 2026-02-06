@@ -45,7 +45,7 @@ if(length(out$new_audio_file_indices) == 0){
   audio_file_indices <- out$new_audio_file_indices
 }
 
-# convert audio file indices so it matches the
+# convert audio file indices so it matches the sql table layout
 df <- out$all_audio_file_indices |>
   lapply(readr::read_csv) |>
   dplyr::bind_rows() |>
