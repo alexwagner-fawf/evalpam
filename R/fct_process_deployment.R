@@ -36,7 +36,7 @@ process_deployment_birdnet <- function(deployment_id,
   dep_info <- get_deployment_info(deployments, deployment_id)
   audio_files_subset <- get_audio_files_for_deployment(audio_files, deployment_id, temporal_filtering)
 
-  birdnet_inference_list_weekly <- vector("list", length = unique(audio_files_subset$week))
+  birdnet_inference_list_weekly <- vector("list", length = length(unique(audio_files_subset$week)))
 
   for(week_i in seq_along(unique(audio_files_subset$week))) {
     week <- unique(audio_files_subset$week)[week_i]
@@ -73,7 +73,9 @@ get_deployment_info <- function(deployments, deployment_id) {
   deployment <- deployments |>
     dplyr::filter(.data$deployment_id == !!deployment_id)
 
-  xy <- deployment |> sf::st_coordinates() |> apply(2, mean)
+  xy <- deployment |>
+    sf::st_coordinates() |>
+    apply(2, mean)
 
   return(list(deployment = deployment, coordinates = xy))
 }
@@ -81,7 +83,7 @@ get_deployment_info <- function(deployments, deployment_id) {
 #' @keywords internal
 get_audio_files_for_deployment <- function(audio_files, deployment_id, temporal_filtering) {
   audio_files_subset <- audio_files |>
-    dplyr::filter(deployment_id == deployment_id)
+    dplyr::filter(.data$deployment_id == !!deployment_id)
 
   if(temporal_filtering){
     audio_files_subset <- audio_files_subset |>
@@ -156,7 +158,7 @@ get_possible_species <- function(bnm_species, species_lut) {
     species_scientific = (bnm_species$label |> stringr::str_split("_", simplify = TRUE, n = 2))[,1]
   )
   species_list |>
-    dplyr::left_join(species_lut) |>
+    dplyr::left_join(species_lut, by = "species_scientific") |>
     dplyr::select(species_scientific, species_id)
 }
 
