@@ -67,7 +67,7 @@ build_spectrogram_db <- function(data, pool, padding_s = 5, analysis_range = 3,
 
         # 3. DB Eintrag anlegen
         insert_q <- "
-          INSERT INTO import.spectrograms (result_id, buffer_s, duration_s, resolution_x, resolution_y, freq_min, freq_max)
+          INSERT INTO import.spectrograms (result_id, buffer_ms, duration_ms, resolution_x, resolution_y, freq_min, freq_max)
           VALUES ($1, $2, $3, $4, $5, 0, 15000)
           RETURNING spectrogram_id
         "
