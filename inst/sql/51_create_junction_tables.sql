@@ -35,6 +35,29 @@ CREATE TABLE IF NOT EXISTS import.settings_species
         ON DELETE RESTRICT
 );
 
--- Optional: index on species_id for reverse lookups
 CREATE INDEX IF NOT EXISTS idx_settings_species_species_id
     ON import.settings_species (species_id);
+
+
+
+-- 9. ANALYSIS LOG (which audio files have been processed)
+CREATE TYPE import.analysis_status AS ENUM (
+    'success',
+    'failed_corrupted_file',
+    'failed_no_file_access',
+    'failed_unknown_reason',
+    'other'
+);
+
+CREATE TABLE import.analysis_log (
+    audio_file_id bigint NOT NULL REFERENCES import.audio_files(audio_file_id),
+    settings_id bigint NOT NULL REFERENCES import.settings(settings_id),
+    analysed_at timestamptz DEFAULT NOW(),
+    status import.analysis_status NOT NULL DEFAULT 'success',
+    UNIQUE (audio_file_id, settings_id)
+);
+
+-- index to quickly get status of failed analyses
+CREATE INDEX idx_analysis_log_audio_not_success
+ON import.analysis_log (audio_file_id)
+WHERE status != 'success';

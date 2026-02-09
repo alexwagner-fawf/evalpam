@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS import.audio_files (
 );
 CREATE INDEX ON import.audio_files (deployment_id);
 -- 5. RESULTS
+
 CREATE SEQUENCE IF NOT EXISTS import.results_data_id_seq;
 CREATE TABLE IF NOT EXISTS import.results (
     result_id bigint NOT NULL DEFAULT nextval('import.results_data_id_seq'::regclass),
@@ -97,23 +98,24 @@ CREATE UNIQUE INDEX ON import.results (audio_file_id, settings_id, begin_time_ms
 -- 6. SPECTROGRAMS
 CREATE SEQUENCE IF NOT EXISTS import.spectrogram_data_id_seq;
 CREATE TABLE IF NOT EXISTS import.spectrograms (
-    spectrogram_id bigint NOT NULL DEFAULT nextval('import.spectrogram_data_id_seq'::regclass),
-    result_id bigint NOT NULL,
-    buffer_s numeric(5,1) NOT NULL,
-    duration_s int NOT NULL,
-    resolution_x int NOT NULL,
-    resolution_y int NOT NULL,
-    freq_min int NOT NULL,
-    freq_max int NOT NULL,
-
-    -- >> NEU: Hier speichern wir den festen Modus für die Aufgabe (z.B. "Full Segmentation") <<
+    spectrogram_id BIGSERIAL PRIMARY KEY,
+    audio_file_id bigint NOT NULL,
+    begin_time_ms integer NOT NULL,
+    result_id bigint,
+    buffer_ms integer NOT NULL,
+    duration_ms integer NOT NULL,
+    resolution_x integer NOT NULL,
+    resolution_y integer NOT NULL,
+    freq_min integer NOT NULL,
+    freq_max integer NOT NULL,
     required_annotation_type_id integer REFERENCES public.lut_annotation_type_code(annotation_type_id),
-
     created_at timestamptz DEFAULT NOW(),
-    CONSTRAINT spectrograms_pkey PRIMARY KEY (spectrogram_id),
-    CONSTRAINT spectrograms_result_id_fkey FOREIGN KEY (result_id) REFERENCES import.results (result_id)
+    CONSTRAINT spectrograms_audio_file_id_fkey FOREIGN KEY (audio_file_id) REFERENCES import.audio_files (audio_file_id) ON DELETE CASCADE,
+    CONSTRAINT spectrograms_result_id_fkey FOREIGN KEY (result_id) REFERENCES import.results (result_id) ON DELETE SET NULL,
+    CONSTRAINT spectrograms_unique_time_annotation UNIQUE (audio_file_id, begin_time_ms, required_annotation_type_id)
 );
 CREATE INDEX ON import.spectrograms (result_id);
+CREATE INDEX ON import.spectrograms (audio_file_id);
 
 -- (Tabelle import.validations WURDE ENTFERNT)
 
