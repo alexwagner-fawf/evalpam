@@ -118,7 +118,7 @@ app_server <- function(input, output, session, pool) {
         CAST(r.end_time_ms AS FLOAT) / 1000.0 as end_sec,
         -- Pfad Konstruktion
         CAST(s.spectrogram_id AS TEXT) || '.mp4' as path,
-        s.buffer_s,
+        s.buffer_ms,
         af.audio_file_id,
         af.required_annotation_type_id,
         lt.annotation_type_description,
@@ -161,7 +161,7 @@ app_server <- function(input, output, session, pool) {
     row_data <- project_data() |> dplyr::filter(path == input$seq)
 
     if(nrow(row_data) > 0) {
-      buffer_val <- row_data$buffer_s[1]
+      buffer_val <- row_data$buffer_ms[1]
       seek_target <- max(0, buffer_val - 2)
 
       # Video Pfad: Wir nehmen an, dass 'spectrograms' als Resource Path gesetzt ist
