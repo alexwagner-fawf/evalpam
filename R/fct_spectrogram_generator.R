@@ -66,13 +66,25 @@ build_spectrogram_db <- function(data, pool, padding_s = 5, analysis_range = 3,
         if (!file.exists(full_path)) stop("Source file not found on disk: ", full_path)
 
         # 3. DB Eintrag anlegen
+        # 3. DB Eintrag anlegen
         insert_q <- "
-          INSERT INTO import.spectrograms (result_id, buffer_ms, duration_ms, resolution_x, resolution_y, freq_min, freq_max)
-          VALUES ($1, $2, $3, $4, $5, 0, 15000)
+          INSERT INTO import.spectrograms
+          (audio_file_id, begin_time_ms, result_id, buffer_ms, duration_ms, resolution_x, resolution_y, freq_min, freq_max)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 15000)
           RETURNING spectrogram_id
         "
+
+        # Prüfung: Falls result_id in den Daten fehlt oder NA ist, wird NULL (NA) gesendet
+        val_result_id <- if(!is.null(row$result_id) && !is.na(row$result_id)) row$result_id else NA
+
         spec_db <- DBI::dbGetQuery(conn, insert_q, params = list(
-          row$result_id, actual_padding_before, as.integer(clip_duration), video_width, video_height
+          row$audio_file_id,           # $1: ZWINGEND (NOT NULL)
+          row$begin_time_ms,           # $2: ZWINGEND (NOT NULL)
+          val_result_id,               # $3: Optional (kann NULL sein)
+          actual_padding_before,       # $4
+          as.integer(clip_duration),   # $5
+          video_width,                 # $6
+          video_height                 # $7
         ))
         spec_id <- spec_db$spectrogram_id
 
