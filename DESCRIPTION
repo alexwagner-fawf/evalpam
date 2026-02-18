@@ -9,6 +9,7 @@ Description: A Shiny app to evaluate AI-annotated passive acoustic
     monitoring data in a database environment.
 License: What license is it under?
 Imports: 
+    arrow,
     base64enc,
     bcrypt,
     config,

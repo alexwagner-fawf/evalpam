@@ -171,25 +171,42 @@ run_birdnet_inference <- function(audio_files_subset, bnm, birdnet_params, setti
       audio_file = audio_files_subset$full_path[i],
       birdnet_setup = bnm,
       birdnet_params = birdnet_params
-    )$prediction_raw
+    )
 
-    res <- res |>
-      dplyr::select(-common_name) |>
-      dplyr::mutate(
-        audio_file_id = audio_files_subset$audio_file_id[i],
-        begin_time_ms = as.integer(round(start * 1000)),
-        end_time_ms   = as.integer(round(end * 1000)),
-        settings_id   = settings_id
-      ) |>
-      dplyr::rename(species_scientific = scientific_name) |>
-      dplyr::left_join(possible_species_df, by = "species_scientific") |>
-      dplyr::mutate(
-        behavior_id = NA_integer_,
-        confidence = as.integer(round(confidence * 10000))
-      ) |>
-      dplyr::select(audio_file_id, settings_id, begin_time_ms, end_time_ms, confidence, species_id, behavior_id)
+    if(!is.null(res$error)){
+      res <- data.frame(audio_file_id = audio_files_subset$audio_file_id[i],
+                        settings_id = settings_id,
+                        begin_time_ms = NA_integer_,
+                        end_time_ms = NA_integer_,
+                        confidence = NA_integer_,
+                        species_id = NA_integer_,
+                        behavior_id = NA_integer_,
+                        error_type= paste0("failed_", res$error$type),
+                        analysed_at = res$prediction_time
+                        )
+    }else{
+      res <- res$prediction_raw |>
+        dplyr::select(-common_name) |>
+        dplyr::mutate(
+          audio_file_id = audio_files_subset$audio_file_id[i],
+          begin_time_ms = as.integer(round(start * 1000)),
+          end_time_ms   = as.integer(round(end * 1000)),
+          settings_id   = settings_id
+        ) |>
+        dplyr::rename(species_scientific = scientific_name) |>
+        dplyr::left_join(possible_species_df, by = "species_scientific") |>
+        dplyr::mutate(
+          behavior_id = NA_integer_,
+          confidence = as.integer(round(confidence * 10000)),
+          error_type = NA_character_
+        ) |>
+        dplyr::mutate(analysed_at = res$prediction_time) |>
+        dplyr::select(audio_file_id, settings_id, begin_time_ms, end_time_ms, confidence, species_id, behavior_id, error_type, analysed_at)
+    }
 
     inference_list[[i]] <- res
+
+
   }
 
   dplyr::bind_rows(inference_list)

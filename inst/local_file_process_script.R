@@ -39,6 +39,8 @@ audio_files <- audio_files |>
     full_path = file.path(deployment_path, relative_path)
   )
 
+audio_files$full_path[1] <- paste0(audio_files$full_path[1], ".123")
+# rm(results_list)
 # process deployments (use spatial and temporal information as species list filters as indicated before)
 results_list <- lapply(as.list(deployments$deployment_id),
        process_deployment_birdnet,
@@ -104,14 +106,19 @@ if(file.exists(index_file)){
 }else{
   inference_index <- dplyr::tibble(
     audio_file_id = integer(),
-    settings_id = integer()
+    settings_id = integer(),
+    status = character(),
+    analysed_at = NA_integer_,
   )
 }
 
 
 # filter birdnet inference based on index
+# the process will also update results if they now succeeded and previously failed
 birdnet_inference_new <- birdnet_inference |>
-  dplyr::anti_join(inference_index, by = c("audio_file_id", "settings_id"))
+  dplyr::anti_join(inference_index |>
+                     dplyr::filter(status == "success"),
+                   by = c("audio_file_id", "settings_id"))
 
 # store new birdnet inference (if any)
 if(nrow(birdnet_inference_new) == 0){
@@ -120,21 +127,39 @@ if(nrow(birdnet_inference_new) == 0){
 
   # export new inference results
   birdnet_inference_new |>
+    dplyr::filter(is.na(error_type)) |>
+    dplyr::select(-error_type, -analysed_at) |>
   fst::write_fst(results_file)
 
   # update local index file
   add2index_file <- birdnet_inference_new |>
-    dplyr::select(audio_file_id, settings_id) |>
-    dplyr::distinct()
+    dplyr::select(audio_file_id, settings_id, error_type, analysed_at) |>
+    dplyr::distinct() |>
+    dplyr::mutate(error_type = ifelse(is.na(error_type), "success", error_type)) |>
+    dplyr::rename(status = error_type)
 
   if(file.exists(index_file)){
+    # append to index and update if status changed - unlikely unsolved edge case: status changes from success to failure
     add2index_file |>
       dplyr::anti_join(inference_index) |>
+      dplyr::bind_rows(inference_index) |>
+      dplyr::arrange(audio_file_id, settings_id, dplyr::desc(analysed_at)) |> #sort by time
+      dplyr::distinct(audio_file_id, settings_id, .keep_all = TRUE) |> #keep new result
       fst::write_fst(index_file)
 
   }else{
     add2index_file |>
       fst::write_fst(index_file)
+  }
+
+
+  if(upload_inference){
+    result_ids <- birdnet_inference_new |>
+      dplyr::filter(is.na(error_type)) |>
+      upsert_results_df(conn = pool)
+
+    add2index_file |>
+      upsert_analysis_log_df(conn = pool)
   }
 }
 
@@ -144,10 +169,6 @@ if(nrow(birdnet_inference_new) == 0){
 # there will be no redundancy as the database/upload function also checks for uniqueness of
 # settings_id, audio_file_id and time
 
-if(upload_inference & nrow(birdnet_inference_new) > 0){
-  result_ids <- birdnet_inference_new |>
-    upsert_results_df(conn = pool)
-}
 
 pool::poolClose(pool)
 

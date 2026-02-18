@@ -409,3 +409,82 @@ upsert_results_df <- function(conn, df_results, update_if_exists = TRUE) {
   return(result$result_id)
 }
 
+
+#' Upsert rows into import.analysis_log from a data.frame
+#'
+#' @param conn A valid DBI pool connection
+#' @param df_log data.frame with columns:
+#'        audio_file_id, settings_id, analysed_at (optional), status (optional)
+#' @param update_if_exists Logical. If TRUE, will update rows matching unique constraint
+#'
+#' @return A data.frame of audio_file_id and settings_id for inserted/updated rows
+#'
+#' @export
+
+upsert_analysis_log_df <- function(conn, df_log, update_if_exists = TRUE) {
+  stopifnot(is.data.frame(df_log))
+
+  # Required columns
+  required_cols <- c("audio_file_id", "settings_id")
+  missing_cols <- setdiff(required_cols, names(df_log))
+  if (length(missing_cols) > 0) {
+    stop("Missing required columns: ", paste(missing_cols, collapse = ", "))
+  }
+
+  # Optional columns with defaults
+  if (!"analysed_at" %in% names(df_log)) {
+    df_log$analysed_at <- NA
+  }
+
+  if (!"status" %in% names(df_log)) {
+    df_log$status <- NA_character_
+  }
+
+  # Columns we use
+  cols_to_use <- c("audio_file_id", "settings_id", "analysed_at", "status")
+  df_temp <- df_log[, cols_to_use, drop = FALSE]
+
+  # Write to temporary table
+  DBI::dbWriteTable(
+    conn,
+    "temp_analysis_log",
+    df_temp,
+    temporary = TRUE,
+    overwrite = TRUE
+  )
+
+  if (update_if_exists) {
+    # UPSERT
+    sql <- "
+      INSERT INTO import.analysis_log
+        (audio_file_id, settings_id, analysed_at, status)
+      SELECT
+        audio_file_id,
+        settings_id,
+        COALESCE(analysed_at, NOW()),
+        COALESCE(status::import.analysis_status, 'unknown')
+      FROM temp_analysis_log
+      ON CONFLICT (audio_file_id, settings_id)
+      DO UPDATE SET
+        analysed_at = COALESCE(EXCLUDED.analysed_at, import.analysis_log.analysed_at),
+        status = EXCLUDED.status
+      RETURNING audio_file_id, settings_id;"
+  } else {
+    # INSERT only
+    sql <- "
+      INSERT INTO import.analysis_log
+        (audio_file_id, settings_id, analysed_at, status)
+      SELECT
+        audio_file_id,
+        settings_id,
+        COALESCE(analysed_at, NOW()),
+        COALESCE(status::import.analysis_status, 'success')
+      FROM temp_analysis_log
+      RETURNING audio_file_id, settings_id;"
+  }
+
+  result <- DBI::dbGetQuery(conn, sql)
+  return(result)
+}
+
+

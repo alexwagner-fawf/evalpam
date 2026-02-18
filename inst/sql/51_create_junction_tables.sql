@@ -43,9 +43,13 @@ CREATE INDEX IF NOT EXISTS idx_settings_species_species_id
 -- 9. ANALYSIS LOG (which audio files have been processed)
 CREATE TYPE import.analysis_status AS ENUM (
     'success',
-    'failed_corrupted_file',
-    'failed_no_file_access',
-    'failed_unknown_reason',
+    'failed_file_not_found',
+    'failed_permission_denied',
+    'failed_empty_file',
+    'failed_corrupt_file',
+    'failed_transient_io_error',
+    'failed_birdnet_inference_error',
+    'unknown',
     'other'
 );
 
