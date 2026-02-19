@@ -27,7 +27,8 @@ process_deployment_birdnet <- function(deployment_id,
                                birdnet_params_list = list(),
                                verbose = TRUE,
                                internal_pool = NULL,
-                               coordinates_decimal_places = 1L) {
+                               coordinates_decimal_places = 1L,
+                               tflite_num_threads = 1) {
   if(is.null(internal_pool)) internal_pool <- set_db_pool()
   on.exit(pool::poolClose(internal_pool), add = TRUE)
 
@@ -46,7 +47,8 @@ process_deployment_birdnet <- function(deployment_id,
                                         longitude =  round(dep_info$coordinates[1], coordinates_decimal_places),
                                         week =  week,
                                         min_confidence = occurence_min_confidence,
-                                        birdnet_params_list = birdnet_params_list)
+                                        birdnet_params_list = birdnet_params_list,
+                                        tflite_num_threads = tflite_num_threads)
     bnm <- model_info$bnm
     birdnet_params <- model_info$birdnet_params
 
@@ -96,12 +98,13 @@ get_audio_files_for_deployment <- function(audio_files, deployment_id, temporal_
 }
 
 #' @keywords internal
-prepare_birdnet_model <- function(latitude, longitude, week, min_confidence, birdnet_params_list = list()) {
+prepare_birdnet_model <- function(latitude, longitude, week, min_confidence, birdnet_params_list = list(), tflite_num_threads) {
   bnm <- setup_birdnet_model(version = "v2.4",
                              latitude = latitude,
                              longitude = longitude,
                              week = week,
-                             min_confidence = min_confidence)
+                             min_confidence = min_confidence
+                             tflite_num_threads = tflite_num_threads)
 
   defaults <- list(
     model_name = bnm$model_name,
