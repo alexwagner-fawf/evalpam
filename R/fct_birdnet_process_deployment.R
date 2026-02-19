@@ -22,6 +22,7 @@
 process_deployment_birdnet <- function(deployment_id,
                                deployments,
                                audio_files,
+                               species,
                                temporal_filtering,
                                occurence_min_confidence,
                                birdnet_params_list = list(),
