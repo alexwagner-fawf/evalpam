@@ -103,7 +103,7 @@ prepare_birdnet_model <- function(latitude, longitude, week, min_confidence, bir
                              latitude = latitude,
                              longitude = longitude,
                              week = week,
-                             min_confidence = min_confidence
+                             min_confidence = min_confidence,
                              tflite_num_threads = tflite_num_threads)
 
   defaults <- list(
