@@ -2,6 +2,12 @@
 # User Management Functions for app_users / app_user_roles
 # ============================================================
 
+# Helper to convert an integer vector to a Postgres array literal: "{1,2,3}"
+to_pg_int_array <- function(ids) {
+  paste0("{", paste(ids, collapse = ","), "}")
+}
+
+
 #' Add a User to the Database
 #'
 #' Creates a new entry in `app_users` and assigns at least one role in
@@ -20,16 +26,20 @@
 #' @param email Optional character. Stored case-insensitively (CITEXT).
 #' @param expire_date Optional Date. When user account expires.
 #' @param active Logical. Whether the account is active (default TRUE).
+#' @param project_ids Optional integer vector. Project IDs to assign to the user.
 #'
 #' @return Invisible list containing success status and metadata.
 #'
 #' @export
-add_users <- function(pool, username, password, pg_role,
-                      first_name = NULL,
-                      last_name = NULL,
-                      email = NULL,
+add_users <- function(pool, username,
+                      password,
+                      pg_role,
+                      first_name  = NULL,
+                      last_name   = NULL,
+                      email       = NULL,
                       expire_date = NULL,
-                      active = TRUE) {
+                      active      = TRUE,
+                      project_ids = NULL) {
 
   # ---- Validation ----
   if (is.null(username) || username == "")
@@ -40,6 +50,12 @@ add_users <- function(pool, username, password, pg_role,
 
   if (is.null(pg_role) || pg_role == "")
     stop("pg_role cannot be empty")
+
+  if (!is.null(project_ids)) {
+    project_ids <- as.integer(project_ids)
+    if (any(is.na(project_ids)))
+      stop("project_ids must be coercible to integers with no NAs")
+  }
 
   # ---- Role Exists? ----
   role_exists <- DBI::dbGetQuery(
@@ -60,6 +76,19 @@ add_users <- function(pool, username, password, pg_role,
 
   if (user_exists)
     stop("User '", username, "' already exists.")
+
+  # ---- Project IDs Exist? ----
+  if (!is.null(project_ids) && length(project_ids) > 0) {
+    found_projects <- DBI::dbGetQuery(
+      pool,
+      "SELECT project_id FROM import.projects WHERE project_id = ANY($1::int[])",
+      params = list(to_pg_int_array(project_ids))
+    )$project_id
+
+    missing <- setdiff(project_ids, found_projects)
+    if (length(missing) > 0)
+      stop("The following project_ids do not exist: ", paste(missing, collapse = ", "))
+  }
 
   # ---- Password Hashing ----
   hashed_password <- bcrypt::hashpw(password)
@@ -94,19 +123,32 @@ add_users <- function(pool, username, password, pg_role,
          VALUES ($1, $2)",
         params = list(user_id, pg_role)
       )
+
+      # Assign projects
+      if (!is.null(project_ids) && length(project_ids) > 0) {
+        for (pid in project_ids) {
+          DBI::dbExecute(
+            conn,
+            "INSERT INTO public.project_users (project_id, user_id)
+             VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
+            params = list(pid, user_id)
+          )
+        }
+      }
     })
 
     invisible(list(
-      success = TRUE,
-      user = username,
-      role = pg_role
+      success  = TRUE,
+      user     = username,
+      role     = pg_role,
+      projects = project_ids
     ))
 
   }, error = function(e) {
     stop("Failed to create user: ", e$message)
   })
 }
-
 
 
 #' Update an Existing User
@@ -118,6 +160,7 @@ add_users <- function(pool, username, password, pg_role,
 #' - email
 #' - expire_date
 #' - roles (adds new role; does not remove existing roles)
+#' - projects (add and/or remove project assignments)
 #'
 #' @param pool A DBI connection pool.
 #' @param username Character. Username whose record is updated.
@@ -128,18 +171,35 @@ add_users <- function(pool, username, password, pg_role,
 #' @param last_name Optional character.
 #' @param email Optional character.
 #' @param expire_date Optional Date.
+#' @param add_project_ids Optional integer vector. Project IDs to assign to the user.
+#' @param remove_project_ids Optional integer vector. Project IDs to remove from the user.
 #'
 #' @return Invisible list with success status.
 #'
 #' @export
 update_user <- function(pool, username,
-                        password = NULL,
-                        pg_role = NULL,
-                        active = NULL,
-                        first_name = NULL,
-                        last_name = NULL,
-                        email = NULL,
-                        expire_date = NULL) {
+                        password           = NULL,
+                        pg_role            = NULL,
+                        active             = NULL,
+                        first_name         = NULL,
+                        last_name          = NULL,
+                        email              = NULL,
+                        expire_date        = NULL,
+                        add_project_ids    = NULL,
+                        remove_project_ids = NULL) {
+
+  # ---- Coerce & validate project_ids ----
+  if (!is.null(add_project_ids)) {
+    add_project_ids <- as.integer(add_project_ids)
+    if (any(is.na(add_project_ids)))
+      stop("add_project_ids must be coercible to integers with no NAs")
+  }
+
+  if (!is.null(remove_project_ids)) {
+    remove_project_ids <- as.integer(remove_project_ids)
+    if (any(is.na(remove_project_ids)))
+      stop("remove_project_ids must be coercible to integers with no NAs")
+  }
 
   # ---- Fetch user_id ----
   user_row <- DBI::dbGetQuery(
@@ -152,6 +212,19 @@ update_user <- function(pool, username,
     stop("User '", username, "' does not exist.")
 
   user_id <- user_row$user_id
+
+  # ---- Validate add_project_ids exist ----
+  if (!is.null(add_project_ids) && length(add_project_ids) > 0) {
+    found_projects <- DBI::dbGetQuery(
+      pool,
+      "SELECT project_id FROM import.projects WHERE project_id = ANY($1::int[])",
+      params = list(to_pg_int_array(add_project_ids))
+    )$project_id
+
+    missing <- setdiff(add_project_ids, found_projects)
+    if (length(missing) > 0)
+      stop("The following project_ids do not exist: ", paste(missing, collapse = ", "))
+  }
 
   # ---- Transaction ----
   tryCatch({
@@ -203,7 +276,6 @@ update_user <- function(pool, username,
       # Role update
       if (!is.null(pg_role)) {
 
-        # Verify role exists
         role_exists <- DBI::dbGetQuery(
           conn,
           "SELECT COUNT(*) AS count FROM pg_roles WHERE rolname = $1",
@@ -213,7 +285,6 @@ update_user <- function(pool, username,
         if (!role_exists)
           stop("PostgreSQL role '", pg_role, "' does not exist.")
 
-        # Add new role (does not overwrite)
         DBI::dbExecute(
           conn,
           "INSERT INTO app_user_roles (user_id, pg_role)
@@ -222,16 +293,43 @@ update_user <- function(pool, username,
           params = list(user_id, pg_role)
         )
       }
+
+      # Add projects
+      if (!is.null(add_project_ids) && length(add_project_ids) > 0) {
+        for (pid in add_project_ids) {
+          DBI::dbExecute(
+            conn,
+            "INSERT INTO public.project_users (project_id, user_id)
+             VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
+            params = list(pid, user_id)
+          )
+        }
+      }
+
+      # Remove projects
+      if (!is.null(remove_project_ids) && length(remove_project_ids) > 0) {
+        DBI::dbExecute(
+          conn,
+          "DELETE FROM public.project_users
+           WHERE user_id = $1
+             AND project_id = ANY($2::int[])",
+          params = list(user_id, to_pg_int_array(remove_project_ids))
+        )
+      }
     })
 
-    invisible(list(success = TRUE, user = username))
+    invisible(list(
+      success          = TRUE,
+      user             = username,
+      added_projects   = add_project_ids,
+      removed_projects = remove_project_ids
+    ))
 
   }, error = function(e) {
     stop("Failed to update user: ", e$message)
   })
 }
-
-
 
 #' Delete a User
 #'

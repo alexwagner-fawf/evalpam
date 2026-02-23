@@ -76,3 +76,7 @@ INSERT INTO import.results (audio_file_id, settings_id, begin_time_ms, end_time_
 (1, 1, 0, 3000, 9500, 6254),   -- Amsel (Erlaubt)
 (2, 1, 10000, 13000, 6500, 4238), -- Kohlmeise (Erlaubt)
 (3, 1, 5000, 8000, 8800, 2371);   -- Buchfink (Nicht auf Whitelist -> Testfall!)
+
+
+INSERT INTO import.spectrograms (spectrogram_id, audio_file_id, begin_time_ms, result_id, buffer_ms, duration_ms, resolution_x, resolution_y, freq_min, freq_max, required_annotation_type_id) VALUES
+(1, 1, 3000, 1, 0, 3000, 700, 1000, 0, 48000, 1);

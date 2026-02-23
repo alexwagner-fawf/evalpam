@@ -16,5 +16,8 @@ app_server(input, output, session, pool)
 \item{pool}{The database connection pool.}
 }
 \description{
-The application Server-Side Logic
+Änderungen/Fixes:
+1. Endlosschleife bei der Artenauswahl behoben (isolate).
+2. Spaltennamen korrigiert (prediction -> species_short).
+3. Robustere Checks gegen leere Daten.
 }
