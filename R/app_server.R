@@ -1,5 +1,9 @@
 #' The application Server-Side Logic
 #'
+#' Änderungen/Fixes:
+#' 1. Endlosschleife bei der Artenauswahl behoben (isolate).
+#' 2. Spaltennamen korrigiert (prediction -> species_short).
+#' 3. Robustere Checks gegen leere Daten.
 #' @param input Internal parameter for `{shiny}`.
 #' @param output Internal parameter for `{shiny}`.
 #' @param session Internal parameter for `{shiny}`.
@@ -11,12 +15,6 @@
 #' @importFrom pool poolWithTransaction
 #' @import shinyjs
 #' @import shinyWidgets
-#' The application Server-Side Logic
-#'
-#' Änderungen/Fixes:
-#' 1. Endlosschleife bei der Artenauswahl behoben (isolate).
-#' 2. Spaltennamen korrigiert (prediction -> species_short).
-#' 3. Robustere Checks gegen leere Daten.
 app_server <- function(input, output, session, pool) {
 
   # ---- 1. Authentication ----

@@ -8,12 +8,14 @@ process_deployment_birdnet(
   deployment_id,
   deployments,
   audio_files,
+  species,
   temporal_filtering,
   occurence_min_confidence,
   birdnet_params_list = list(),
   verbose = TRUE,
   internal_pool = NULL,
-  coordinates_decimal_places = 1L
+  coordinates_decimal_places = 1L,
+  tflite_num_threads = 1
 )
 }
 \arguments{
