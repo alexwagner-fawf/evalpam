@@ -60,7 +60,7 @@ INSERT INTO import.audio_files (deployment_id, sample_rate, relative_path, durat
 
 -- 7. Settings
 INSERT INTO import.settings (model_name, min_conf, overlap, model_params) VALUES
-('BirdNET_v2.4', 0.5, 0.0, '{"dummy_parameter": 123}'::jsonb);
+('BirdNET_v2.4', 0.5, 0.0, '{{"dummy_parameter": 123}}'::jsonb);
 
 -- >>> NEU: SETTINGS SPECIES WHITELIST <<<
 -- Wir erlauben für Setting 1 nur Amsel (1) und Kohlmeise (2).
