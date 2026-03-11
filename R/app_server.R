@@ -135,13 +135,20 @@ app_server <- function(input, output, session, pool) {
       WHERE d.project_id = $1
       ORDER BY af.relative_path, r.begin_time_ms
     "
-    DBI::dbGetQuery(pool, query, params = list(input$selected_project))
+    result <- DBI::dbGetQuery(pool, query, params = list(input$selected_project))
+
+    result |>
+      dplyr::arrange(species_id, desc(score))
   })
 
   # Update File List
   observeEvent(project_data(), {
     req(project_data())
-    files <- unique(project_data()$path)
+    files <- project_data() |>
+      dplyr::pull(path) |>
+      unique()
+
+    files_avail <- files[files %in% basename(list.files("spectrograms"))]
     updateSelectizeInput(session, "seq", choices = files, server = TRUE)
   })
 
