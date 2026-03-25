@@ -44,6 +44,9 @@ app_ui <- function(request) {
           # --- NAVIGATION ---
           uiOutput("project_selector_ui"),
           uiOutput("target_species_ui"),
+          uiOutput("mode_info_ui"),
+          numericInput("score_start", "Scores anzeigen ab / Show scores from:",
+                       value = 1.0, min = 0, max = 1, step = 0.05),
           selectizeInput("seq", "Sequenz / File:", choices = character(0), options = list(maxOptions = 10000)),
 
           # Info-Boxen (Task & Warnungen)

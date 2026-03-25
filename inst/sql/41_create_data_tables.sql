@@ -83,13 +83,15 @@ CREATE TABLE IF NOT EXISTS import.results (
     confidence smallint,
     species_id integer NOT NULL,
     behavior_id integer,
+    certainty_id smallint DEFAULT 1,
     created_at timestamptz DEFAULT NOW(),
     CONSTRAINT results_unique_entry UNIQUE(audio_file_id, settings_id, begin_time_ms, end_time_ms, species_id),
     CONSTRAINT results_pkey PRIMARY KEY (result_id),
     CONSTRAINT results_settings_id_fkey FOREIGN KEY (settings_id) REFERENCES import.settings (settings_id),
     CONSTRAINT results_audio_file_id_fkey FOREIGN KEY (audio_file_id) REFERENCES import.audio_files (audio_file_id),
     CONSTRAINT results_species_id_fkey FOREIGN KEY (species_id) REFERENCES public.lut_species_code (species_id),
-    CONSTRAINT results_behavior_id_fkey FOREIGN KEY (behavior_id) REFERENCES public.lut_behavior_code (behavior_id)
+    CONSTRAINT results_behavior_id_fkey FOREIGN KEY (behavior_id) REFERENCES public.lut_behavior_code (behavior_id),
+    CONSTRAINT ground_truth_certainty_fkey FOREIGN KEY (certainty_id) REFERENCES public.lut_certainty_code (certainty_id),
 );
 CREATE INDEX ON import.results (audio_file_id);
 CREATE INDEX ON import.results (species_id);

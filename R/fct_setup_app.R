@@ -98,6 +98,17 @@ setup_app <- function(user = "postgres",
 }
 
 
+#' Split SQL respecting dollar-quoted blocks ($$, $fn$, etc.)
+#' @noRd
+split_sql_statements <- function(sql) {
+  ph <- "\x01"
+  # Semikolons innerhalb von $..$ Blöcken durch Platzhalter ersetzen
+  m <- gregexpr("(?s)(\\$[A-Za-z_]*\\$).*?\\1", sql, perl = TRUE)
+  regmatches(sql, m) <- lapply(regmatches(sql, m), function(x) gsub(";", ph, x))
+  stmts <- trimws(unlist(strsplit(sql, ";")))
+  stmts <- stmts[nchar(stmts) > 0]
+  gsub(ph, ";", stmts, fixed = TRUE)
+}
 
 setup_db <- function(user, host, port, evalpam_dbname, password, pool, config, dummy){
 
@@ -132,7 +143,7 @@ setup_db <- function(user, host, port, evalpam_dbname, password, pool, config, d
       paste(collapse = "\n")
 
 
-    statements <- unlist(strsplit(sql, ";"))
+    statements <- split_sql_statements(sql)
 
     for(statement in statements){
       statement <- glue::glue_sql(statement,

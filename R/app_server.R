@@ -54,6 +54,9 @@ app_server <- function(input, output, session, pool) {
   behavior_list <- reactive({
     DBI::dbGetQuery(pool, "SELECT behavior_id, behavior_long_de, behavior_long_en FROM public.lut_behavior_code ORDER BY behavior_id")
   })
+  certainty_list <- reactive({
+    DBI::dbGetQuery(pool, "SELECT certainty_id, certainty_long_de, certainty_long_en FROM public.lut_certainty_code ORDER BY certainty_id")
+  })
 
   # ---- 3. Language & Labels Observer ----
   observe({
@@ -137,6 +140,20 @@ app_server <- function(input, output, session, pool) {
     }
   })
 
+  output$mode_info_ui <- renderUI({
+    req(project_mode())
+    if(project_mode() == "binary") {
+      div(style = "padding: 6px 12px; margin-bottom: 10px; background: #d9edf7; border-left: 4px solid #31708f; border-radius: 4px;",
+          icon("crosshairs"), tags$strong(" Modus: Binary"),
+          tags$small(" — nur Zielart bewerten", style = "color: #31708f;"))
+    } else {
+      div(style = "padding: 6px 12px; margin-bottom: 10px; background: #dff0d8; border-left: 4px solid #3c763d; border-radius: 4px;",
+          icon("list-check"), tags$strong(" Modus: Full"),
+          tags$small(" — alle Arten bestimmen", style = "color: #3c763d;"))
+    }
+  })
+
+
 
   # ---- 5. Load Data from DB  ----
   project_data <- reactive({
@@ -190,6 +207,12 @@ app_server <- function(input, output, session, pool) {
       df <- df |>
         dplyr::filter(species_id == target_id) |>
         dplyr::arrange(dplyr::desc(score))
+    }
+
+    if(!is.null(input$score_start)) {
+      # score in DB ist smallint (x10000), input ist 0-1
+      score_threshold <- as.integer(input$score_start * 10000)
+      df <- df |> dplyr::filter(score <= score_threshold)
     }
 
     paths <- unique(df$path)
@@ -318,6 +341,11 @@ app_server <- function(input, output, session, pool) {
     beh_labels <- switch(input$species_lang, "de"=df_beh$behavior_long_de, "en"=df_beh$behavior_long_en, "sci"=df_beh$behavior_long_en)
     beh_choices <- setNames(df_beh$behavior_id, beh_labels)
 
+    df_cert <- certainty_list()
+    cert_labels <- switch(input$species_lang, "de"=df_cert$certainty_long_de, "en"=df_cert$certainty_long_en, "sci"=df_cert$certainty_long_en)
+    cert_choices <- setNames(df_cert$certainty_id, cert_labels)
+
+
     # DB Check
     aid_query <- project_data() |> dplyr::filter(path == input$seq)
     saved_behaviors <- data.frame(species_id = integer(), behavior_id = integer())
@@ -328,11 +356,11 @@ app_server <- function(input, output, session, pool) {
 
       # CHANGE: Auch hier nach Zeit filtern!
       q_beh <- "
-        SELECT species_id, behavior_id
+        SELECT species_id, behavior_id, certainty_id
         FROM import.ground_truth_annotations
         WHERE audio_file_id = $1
         AND user_id = $2
-        AND begin_time_ms = $3 -- << FIX
+        AND begin_time_ms = $3
       "
       saved_behaviors <- DBI::dbGetQuery(pool, q_beh, params = list(current_aid, res_auth$user_id, start_ms))
     }
@@ -364,12 +392,22 @@ app_server <- function(input, output, session, pool) {
       if (!is.null(val_ui)) selected_val <- val_ui
       else if (length(val_db) > 0 && !is.na(val_db[1])) selected_val <- val_db[1]
 
+      # --- Certainty Value Logic (NEU, kommt direkt danach) ---
+      cert_input_id <- paste0("cert_", code_id)
+      val_cert_ui <- isolate(input[[cert_input_id]])
+      val_cert_db <- saved_behaviors$certainty_id[saved_behaviors$species_id == as.numeric(code_id)]
+      selected_cert <- 1L
+      if (!is.null(val_cert_ui)) selected_cert <- val_cert_ui
+      else if (length(val_cert_db) > 0 && !is.na(val_cert_db[1])) selected_cert <- val_cert_db[1]
+
+
       div(
         class = "panel panel-default", style = "margin-bottom: 5px; border-left: 4px solid #337ab7;",
         div(class = "panel-body", style = "padding: 8px;",
             fluidRow(
-              column(6, tags$strong(display_name, style="line-height: 30px;")),
-              column(6, selectInput(input_id, NULL, choices = beh_choices, selected = selected_val, width = "100%", selectize = FALSE))
+              column(4, tags$strong(display_name, style="line-height: 30px;")),
+              column(4, selectInput(input_id, NULL, choices = beh_choices, selected = selected_val, width = "100%", selectize = FALSE)),
+              column(4, selectInput(cert_input_id, NULL, choices = cert_choices, selected = selected_cert, width = "100%", selectize = FALSE))
             )
         )
       )
@@ -469,7 +507,12 @@ app_server <- function(input, output, session, pool) {
           } else {
             beh_val_sql <- as.integer(beh_val)
           }
-          inserts_to_do[[length(inserts_to_do) + 1]] <- list(sid = sid, bid = beh_val_sql)
+          cert_input_id <- paste0("cert_", sid)
+          cert_val <- input[[cert_input_id]]
+          cert_val_sql <- if(is.null(cert_val) || cert_val == "") 1L else as.integer(cert_val)
+
+          inserts_to_do[[length(inserts_to_do) + 1]] <- list(sid = sid, bid = beh_val_sql, cid = cert_val_sql)
+
         }
       }
     }
@@ -500,8 +543,10 @@ app_server <- function(input, output, session, pool) {
         if (length(inserts_to_do) > 0) {
           for(item in inserts_to_do) {
             DBI::dbExecute(conn,
-                           "INSERT INTO import.ground_truth_annotations (audio_file_id, user_id, species_id, behavior_id, begin_time_ms, end_time_ms, is_present) VALUES ($1, $2, $3, $4, $5, $6, TRUE)",
-                           list(aid, res_auth$user_id, item$sid, item$bid, start_ms, end_ms))
+                           "INSERT INTO import.ground_truth_annotations
+               (audio_file_id, user_id, species_id, behavior_id, certainty_id, begin_time_ms, end_time_ms, is_present)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE)",
+                           list(aid, res_auth$user_id, item$sid, item$bid, item$cid, start_ms, end_ms))
           }
         }
 
