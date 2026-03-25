@@ -43,6 +43,7 @@ app_ui <- function(request) {
 
           # --- NAVIGATION ---
           uiOutput("project_selector_ui"),
+          uiOutput("target_species_ui"),
           selectizeInput("seq", "Sequenz / File:", choices = character(0), options = list(maxOptions = 10000)),
 
           # Info-Boxen (Task & Warnungen)

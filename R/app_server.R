@@ -103,7 +103,42 @@ app_server <- function(input, output, session, pool) {
     selectInput("selected_project", "Select Project:", choices = setNames(user_projects()$project_id, user_projects()$project_name_short))
   })
 
-  # ---- 5. Load Data from DB (Das ist dein "get_data_from_db") ----
+  # ---- 4b. Annotation-Modus pro User+Projekt ----
+  project_mode <- reactive({
+    req(input$selected_project, res_auth$user_id)
+    tryCatch({
+      q <- "SELECT annotation_mode FROM public.project_users WHERE project_id = $1 AND user_id = $2"
+      res <- DBI::dbGetQuery(pool, q, params = list(input$selected_project, res_auth$user_id))
+      if(nrow(res) == 0) return("full")
+      res$annotation_mode
+    }, error = function(e) "full")
+  })
+
+  # ---- 4c. Zielart-Auswahl (Filter + Sort) ----
+  output$target_species_ui <- renderUI({
+    req(project_mode(), species_list(), input$species_lang)
+    df <- species_list()
+    labels <- switch(input$species_lang,
+                     "de"  = df$species_long_de,
+                     "en"  = df$species_long_en,
+                     "sci" = df$species_scientific)
+    labels[is.na(labels) | labels == ""] <- as.character(df$species_id[is.na(labels) | labels == ""])
+    choices <- setNames(as.character(df$species_id), labels)
+    choices <- choices[order(names(choices))]
+
+    if(project_mode() == "binary") {
+      tagList(
+        selectInput("target_species", "Zielart / Target Species:", choices = choices),
+        tags$small("Modus: Binary (nur Zielart bewerten)", style = "color: #888;")
+      )
+    } else {
+      selectInput("target_species", "Sortieren nach Art / Sort by Species:",
+                  choices = c("\u2014 Alle \u2014" = "", choices))
+    }
+  })
+
+
+  # ---- 5. Load Data from DB  ----
   project_data <- reactive({
     req(input$selected_project)
 
@@ -142,15 +177,57 @@ app_server <- function(input, output, session, pool) {
   })
 
   # Update File List
-  observeEvent(project_data(), {
+  filtered_files <- reactive({
     req(project_data())
-    files <- project_data() |>
-      dplyr::pull(path) |>
-      unique()
+    df <- project_data()
+    mode <- project_mode()
 
-    files_avail <- files[files %in% basename(list.files("spectrograms"))]
-    updateSelectizeInput(session, "seq", choices = files, server = TRUE)
+    target_id <- if(!is.null(input$target_species) && input$target_species != "") {
+      as.integer(input$target_species)
+    } else NULL
+
+    if(!is.null(target_id)) {
+      df <- df |>
+        dplyr::filter(species_id == target_id) |>
+        dplyr::arrange(dplyr::desc(score))
+    }
+
+    paths <- unique(df$path)
+
+    # Bereits bearbeitete ausblenden (nur wenn Art gewählt)
+    if(!is.null(target_id)) {
+      if(mode == "binary") {
+        q_done <- "
+          SELECT CAST(s.spectrogram_id AS TEXT) || '.mp4' as path
+          FROM import.annotation_status ast
+          JOIN import.spectrograms s
+            ON ast.audio_file_id = s.audio_file_id
+            AND ast.begin_time_ms = s.begin_time_ms
+          WHERE ast.target_species_id = $1
+        "
+        done <- DBI::dbGetQuery(pool, q_done, params = list(target_id))$path
+      } else {
+        q_done <- "
+          SELECT CAST(s.spectrogram_id AS TEXT) || '.mp4' as path
+          FROM import.annotation_status ast
+          JOIN import.spectrograms s
+            ON ast.audio_file_id = s.audio_file_id
+            AND ast.begin_time_ms = s.begin_time_ms
+          WHERE ast.target_species_id IS NULL
+        "
+        done <- DBI::dbGetQuery(pool, q_done)$path
+      }
+      paths <- paths[!paths %in% done]
+    }
+
+    paths
   })
+
+  observe({
+    req(filtered_files())
+    updateSelectizeInput(session, "seq", choices = filtered_files(), server = TRUE)
+  })
+
 
   # ---- 6. Current File Logic ----
   current_file_df <- reactive({
@@ -181,7 +258,8 @@ app_server <- function(input, output, session, pool) {
     }
   })
 
-  # ---- Smart Species Selection ----
+
+  #C: "Smart Species Selection"
   observeEvent(input$seq, {
     req(input$seq, project_data(), res_auth$user_id)
 
@@ -190,26 +268,33 @@ app_server <- function(input, output, session, pool) {
 
     aid <- current_file_info$audio_file_id[1]
     start_ms <- as.integer(current_file_info$start[1] * 1000)
+    mode <- project_mode()
 
-    # 1. STATUS CHECK: Habe ich diesen Schnipsel schon mal angefasst?
-    q_status <- "SELECT 1 FROM import.annotation_status WHERE audio_file_id = $1 AND user_id = $2 AND begin_time_ms = $3"
-    has_status <- DBI::dbGetQuery(pool, q_status, params = list(aid, res_auth$user_id, start_ms))
+    # Status Check je nach Modus
+    if(mode == "binary" && !is.null(input$target_species) && input$target_species != "") {
+      q_status <- "SELECT 1 FROM import.annotation_status WHERE audio_file_id = $1 AND begin_time_ms = $2 AND target_species_id = $3"
+      has_status <- DBI::dbGetQuery(pool, q_status, params = list(aid, start_ms, as.integer(input$target_species)))
+    } else {
+      q_status <- "SELECT 1 FROM import.annotation_status WHERE audio_file_id = $1 AND user_id = $2 AND begin_time_ms = $3"
+      has_status <- DBI::dbGetQuery(pool, q_status, params = list(aid, res_auth$user_id, start_ms))
+    }
 
     if(nrow(has_status) > 0) {
-      # CASE A: Wiederkehrer (Bereits bearbeitet)
-      # Wir laden die gespeicherten Arten (kann auch LEER sein, wenn alles abgewählt wurde!)
-
       q_gt <- "SELECT species_id FROM import.ground_truth_annotations WHERE audio_file_id = $1 AND user_id = $2 AND begin_time_ms = $3"
       existing_annotations <- DBI::dbGetQuery(pool, q_gt, params = list(aid, res_auth$user_id, start_ms))
-
       selected_species <- as.character(existing_annotations$species_id)
-      # Keine Notification mehr nötig, oder text ändern zu "Status geladen"
-
     } else {
-      # CASE B: Frischer Start (Noch nie gespeichert)
-      # Wir laden die BirdNET Vorschläge als Starthilfe
-      selected_species <- unique(current_file_info$species_id)
-      selected_species <- as.character(selected_species[!is.na(selected_species)])
+      if(mode == "binary" && !is.null(input$target_species) && input$target_species != "") {
+        target_id <- as.integer(input$target_species)
+        if(target_id %in% current_file_info$species_id) {
+          selected_species <- as.character(target_id)
+        } else {
+          selected_species <- character(0)
+        }
+      } else {
+        selected_species <- unique(current_file_info$species_id)
+        selected_species <- as.character(selected_species[!is.na(selected_species)])
+      }
     }
 
     shinyWidgets::updateMultiInput(session, "inSelect", selected = selected_species)
@@ -294,55 +379,48 @@ app_server <- function(input, output, session, pool) {
 
   # ---- 8. Status Check (Locking) ----
   observe({
-    # Wir brauchen seq, daten und user
     req(input$seq, project_data(), res_auth$user_id)
-
-    # 1. Daten für aktuellen Schnipsel holen
-    # Wir brauchen die Zeiten, um genau DIESEN Schnipsel zu prüfen
-    current_row <- project_data() |>
-      dplyr::filter(path == input$seq)
-
+    current_row <- project_data() |> dplyr::filter(path == input$seq)
     if(nrow(current_row) == 0) return()
 
     aid <- current_row$audio_file_id[1]
-
-    # Zeiten in Millisekunden umrechnen (wie beim Speichern)
     start_ms <- as.integer(current_row$start[1] * 1000)
+    mode <- project_mode()
 
-    # 2. Check: Gibt es einen Status für GENAU DIESEN Start-Zeitpunkt?
-    # Vorher hatten wir nur "WHERE audio_file_id = $1". Das war zu grob.
-    query_status <- "
-      SELECT user_id
-      FROM import.annotation_status
-      WHERE audio_file_id = $1
-      AND begin_time_ms = $2  -- << HIER IST DER TRICK
-      LIMIT 1
-    "
+    if(mode == "binary" && !is.null(input$target_species) && input$target_species != "") {
+      query_status <- "
+        SELECT user_id FROM import.annotation_status
+        WHERE audio_file_id = $1 AND begin_time_ms = $2 AND target_species_id = $3
+        LIMIT 1
+      "
+      existing_status <- DBI::dbGetQuery(pool, query_status, params = list(aid, start_ms, as.integer(input$target_species)))
+    } else {
+      query_status <- "
+        SELECT user_id FROM import.annotation_status
+        WHERE audio_file_id = $1 AND begin_time_ms = $2 AND target_species_id IS NULL
+        LIMIT 1
+      "
+      existing_status <- DBI::dbGetQuery(pool, query_status, params = list(aid, start_ms))
+    }
 
-    existing_status <- DBI::dbGetQuery(pool, query_status, params = list(aid, start_ms))
-
-    # 3. Logik (Wer hat's gemacht?)
     if(nrow(existing_status) > 0) {
       owner_id <- existing_status$user_id
-
       if(owner_id == res_auth$user_id) {
-        # CASE A: Du hast diesen Schnipsel schon gemacht
         output$text1 <- renderText("Info: Du hast diesen Schnipsel bereits bearbeitet (Update).")
         shinyjs::enable("add_btn")
         updateActionButton(session, "add_btn", label = "Update", icon = icon("edit"))
       } else {
-        # CASE B: Ein Kollege hat diesen Schnipsel gemacht
         output$text1 <- renderText("LOCKED: Schnipsel von anderem User bearbeitet!")
         shinyjs::disable("add_btn")
         updateActionButton(session, "add_btn", label = "Locked", icon = icon("lock"))
       }
     } else {
-      # CASE C: Neu / Offen
-      output$text1 <- renderText("") # Kein Text = Alles gut
+      output$text1 <- renderText("")
       shinyjs::enable("add_btn")
       updateActionButton(session, "add_btn", label = "Speichern & Weiter", icon = icon("paper-plane"))
     }
   })
+
 
   # ---- 9. Tabelle ----
   output$table_bnet <- DT::renderDataTable({
@@ -363,89 +441,81 @@ app_server <- function(input, output, session, pool) {
   observeEvent(input$add_btn, {
     req(input$seq, res_auth$user_id)
 
-    # 1. Daten aus der UI holen
     df <- current_file_df()
     if(nrow(df) == 0) return()
 
     aid <- df$audio_file_id[1]
-
-    # Zeit berechnen
     start_ms <- as.integer(min(df$start) * 1000)
     end_ms   <- as.integer(max(df$end_sec) * 1000)
-
-    # Annotation Type (Fallback auf 1)
     fixed_type_id <- df$required_annotation_type_id[1]
     if(is.na(fixed_type_id)) fixed_type_id <- 1
 
-    # ---------------------------------------------------------
-    # SCHRITT A: Daten VORBEREITEN (JETZT INNERHALB DER KLAMMER!)
-    # ---------------------------------------------------------
+    mode <- project_mode()
+    target_species_val <- if(mode == "binary" && !is.null(input$target_species) && input$target_species != "") {
+      as.integer(input$target_species)
+    } else NULL
+
     inserts_to_do <- list()
-    selected_ids <- input$inSelect # Hier ist der Zugriff erlaubt!
+    selected_ids <- input$inSelect
 
     if (!is.null(selected_ids) && length(selected_ids) > 0) {
       for(id_str in selected_ids) {
-
-        # String zu ID wandeln
         sid <- as.integer(id_str)
-
         if(!is.na(sid)) {
-          # Behavior ID holen
           input_id <- paste0("beh_", sid)
           beh_val <- input[[input_id]]
-
-          # Behavior Wert verarbeiten
           if(is.null(beh_val) || beh_val == "" || beh_val == "NA") {
             beh_val_sql <- NA_integer_
           } else {
             beh_val_sql <- as.integer(beh_val)
           }
-
-          inserts_to_do[[length(inserts_to_do) + 1]] <- list(
-            sid = sid,
-            bid = beh_val_sql
-          )
+          inserts_to_do[[length(inserts_to_do) + 1]] <- list(sid = sid, bid = beh_val_sql)
         }
       }
     }
 
-    # ---------------------------------------------------------
-    # SCHRITT B: TRANSAKTION (Schreiben)
-    # ---------------------------------------------------------
     tryCatch({
       pool::poolWithTransaction(pool, function(conn) {
 
-        # 1. Aufräumen (Löschen)
-        # FEHLER WAR: "DELETE ... WHERE audio_file_id = $1" -> Das löscht ALLES in der Datei!
-        # FIX: "DELETE ... WHERE ... AND begin_time_ms = $3" -> Löscht nur DIESEN Schnipsel.
+        # DELETE je nach Modus
+        if(!is.null(target_species_val)) {
+          # Binary: Nur Zielart löschen
+          DBI::dbExecute(conn,
+                         "DELETE FROM import.ground_truth_annotations WHERE audio_file_id = $1 AND user_id = $2 AND begin_time_ms = $3 AND species_id = $4",
+                         list(aid, res_auth$user_id, start_ms, target_species_val))
+          DBI::dbExecute(conn,
+                         "DELETE FROM import.annotation_status WHERE audio_file_id = $1 AND user_id = $2 AND begin_time_ms = $3 AND target_species_id = $4",
+                         list(aid, res_auth$user_id, start_ms, target_species_val))
+        } else {
+          # Full: Alles für diesen Schnipsel löschen
+          DBI::dbExecute(conn,
+                         "DELETE FROM import.ground_truth_annotations WHERE audio_file_id = $1 AND user_id = $2 AND begin_time_ms = $3",
+                         list(aid, res_auth$user_id, start_ms))
+          DBI::dbExecute(conn,
+                         "DELETE FROM import.annotation_status WHERE audio_file_id = $1 AND user_id = $2 AND begin_time_ms = $3 AND target_species_id IS NULL",
+                         list(aid, res_auth$user_id, start_ms))
+        }
 
-        del_q_gt <- "DELETE FROM import.ground_truth_annotations WHERE audio_file_id = $1 AND user_id = $2 AND begin_time_ms = $3"
-        DBI::dbExecute(conn, del_q_gt, list(aid, res_auth$user_id, start_ms))
-
-        del_q_st <- "DELETE FROM import.annotation_status WHERE audio_file_id = $1 AND user_id = $2 AND begin_time_ms = $3"
-        DBI::dbExecute(conn, del_q_st, list(aid, res_auth$user_id, start_ms))
-
-        # 2. Schreiben (Bleibt gleich, da wir start_ms schon übergeben haben)
+        # INSERT ground_truth
         if (length(inserts_to_do) > 0) {
           for(item in inserts_to_do) {
             DBI::dbExecute(conn,
                            "INSERT INTO import.ground_truth_annotations (audio_file_id, user_id, species_id, behavior_id, begin_time_ms, end_time_ms, is_present) VALUES ($1, $2, $3, $4, $5, $6, TRUE)",
-                           list(aid, res_auth$user_id, item$sid, item$bid, start_ms, end_ms)
-            )
+                           list(aid, res_auth$user_id, item$sid, item$bid, start_ms, end_ms))
           }
         }
 
-        # 3. Status schreiben (Bleibt gleich)
+        # INSERT annotation_status MIT target_species_id
+        target_sid_sql <- if(!is.null(target_species_val)) target_species_val else NA_integer_
         DBI::dbExecute(conn,
-                       "INSERT INTO import.annotation_status (audio_file_id, user_id, begin_time_ms, end_time_ms, annotation_type_id) VALUES ($1, $2, $3, $4, $5)",
-                       list(aid, res_auth$user_id, start_ms, end_ms, fixed_type_id)
-        )
+                       "INSERT INTO import.annotation_status (audio_file_id, user_id, begin_time_ms, end_time_ms, annotation_type_id, target_species_id) VALUES ($1, $2, $3, $4, $5, $6)",
+                       list(aid, res_auth$user_id, start_ms, end_ms, fixed_type_id, target_sid_sql))
       })
 
       showNotification("Gespeichert!", type = "message")
 
-      # Next File Logik
-      current_choices <- unique(project_data()$path)
+      # Navigation: filtered_files statt project_data
+      current_choices <- filtered_files()
       curr_idx <- which(current_choices == input$seq)
 
       if(length(curr_idx) > 0 && curr_idx < length(current_choices)) {

@@ -3,8 +3,10 @@ CREATE TABLE IF NOT EXISTS public.project_users
 (
     project_id integer NOT NULL,
     user_id    bigint NOT NULL,
+    annotation_mode varchar(10) NOT NULL DEFAULT 'full',
     created_at timestamptz DEFAULT now(),
     CONSTRAINT project_users_pkey PRIMARY KEY (project_id, user_id),
+    CONSTRAINT check_annotation_mode CHECK (annotation_mode IN ('full', 'binary')),
     CONSTRAINT project_users_project_id_fkey FOREIGN KEY (project_id)
         REFERENCES import.projects (project_id)
         ON UPDATE CASCADE

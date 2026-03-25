@@ -142,10 +142,12 @@ CREATE TABLE IF NOT EXISTS import.annotation_status (
 
     -- >> STRENGER CONSTRAINT (Strict Locking) <<
     -- Keine Überlappung erlaubt, egal welcher User. Single Source of Truth.
-    CONSTRAINT no_status_overlap_global EXCLUDE USING GIST (
+  CONSTRAINT no_status_overlap_global EXCLUDE USING GIST (
         audio_file_id WITH =,
+        COALESCE(target_species_id, 0) WITH =,
         int4range(begin_time_ms, end_time_ms) WITH &&
     )
+
 );
 CREATE INDEX ON import.annotation_status (audio_file_id);
 CREATE INDEX ON import.annotation_status (user_id);
@@ -183,3 +185,43 @@ CREATE TABLE IF NOT EXISTS import.ground_truth_annotations (
 );
 CREATE INDEX ON import.ground_truth_annotations (audio_file_id);
 CREATE INDEX ON import.ground_truth_annotations (species_id);
+
+
+-- ============================================================
+-- xxx: Trigger
+-- ============================================================
+
+-- >> TRIGGER: Kein Mode-Mixing pro Schnipsel <<
+CREATE OR REPLACE FUNCTION import.trg_check_annotation_mode_consistency()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.target_species_id IS NULL THEN
+        IF EXISTS (
+            SELECT 1 FROM import.annotation_status
+            WHERE audio_file_id = NEW.audio_file_id
+              AND begin_time_ms = NEW.begin_time_ms
+              AND target_species_id IS NOT NULL
+        ) THEN
+            RAISE EXCEPTION 'Mode-Konflikt: Schnipsel (audio_file_id=%, begin_time_ms=%) hat bereits Binary-Einträge. Full-Eintrag nicht erlaubt.',
+                NEW.audio_file_id, NEW.begin_time_ms;
+        END IF;
+    ELSE
+        IF EXISTS (
+            SELECT 1 FROM import.annotation_status
+            WHERE audio_file_id = NEW.audio_file_id
+              AND begin_time_ms = NEW.begin_time_ms
+              AND target_species_id IS NULL
+        ) THEN
+            RAISE EXCEPTION 'Mode-Konflikt: Schnipsel (audio_file_id=%, begin_time_ms=%) hat bereits einen Full-Eintrag. Binary-Eintrag nicht erlaubt.',
+                NEW.audio_file_id, NEW.begin_time_ms;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER check_annotation_mode_consistency
+    BEFORE INSERT ON import.annotation_status
+    FOR EACH ROW
+    EXECUTE FUNCTION import.trg_check_annotation_mode_consistency();
+
