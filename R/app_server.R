@@ -167,7 +167,8 @@ app_server <- function(input, output, session, pool) {
         CAST(r.begin_time_ms AS FLOAT) / 1000.0 as start,
         CAST(r.end_time_ms AS FLOAT) / 1000.0 as end_sec,
         -- Pfad Konstruktion
-        CAST(s.spectrogram_id AS TEXT) || '.mp4' as path,
+        --  CAST(s.spectrogram_id AS TEXT) || '.mp4' as path, for video
+        CAST(s.spectrogram_id AS TEXT) || '.mp3' as path,
         s.buffer_ms,
         af.audio_file_id,
         af.required_annotation_type_id,
@@ -261,23 +262,42 @@ app_server <- function(input, output, session, pool) {
   })
 
   # Video Player Logic
+  # observeEvent(input$seq, {
+  #   req(input$seq, project_data())
+  #   row_data <- project_data() |> dplyr::filter(path == input$seq)
+  #
+  #   if(nrow(row_data) > 0) {
+  #     buffer_val <- row_data$buffer_ms[1]
+  #     seek_target <- max(0, buffer_val - 2)
+  #
+  #     # Video Pfad: Wir nehmen an, dass 'spectrograms' als Resource Path gesetzt ist
+  #     video::changeVideo("video", paste0("spectrograms/", input$seq))
+  #
+  #     shinyjs::delay(750, { # Delay etwas erhöht für Stabilität
+  #       try({
+  #         video::seekVideo("video", seek = seek_target)
+  #         video::playVideo("video")
+  #       }, silent = TRUE)
+  #     })
+  #   }
+  # })
+
   observeEvent(input$seq, {
     req(input$seq, project_data())
     row_data <- project_data() |> dplyr::filter(path == input$seq)
 
     if(nrow(row_data) > 0) {
-      buffer_val <- row_data$buffer_ms[1]
+      buffer_val <- row_data$buffer_ms[1]  # Sekunden bis Detektion
       seek_target <- max(0, buffer_val - 2)
+      analysis_range <- 3  # BirdNET Fenster in Sekunden
 
-      # Video Pfad: Wir nehmen an, dass 'spectrograms' als Resource Path gesetzt ist
-      video::changeVideo("video", paste0("spectrograms/", input$seq))
-
-      shinyjs::delay(750, { # Delay etwas erhöht für Stabilität
-        try({
-          video::seekVideo("video", seek = seek_target)
-          video::playVideo("video")
-        }, silent = TRUE)
-      })
+      session$sendCustomMessage("ws_load", list(
+        url = paste0("spectrograms/", input$seq),
+        seek = seek_target,
+        detection_start = buffer_val,
+        detection_end = buffer_val + analysis_range,
+        freq_max = 15000
+      ))
     }
   })
 
@@ -581,4 +601,67 @@ app_server <- function(input, output, session, pool) {
   output$user_info <- renderUI({
     h4(paste("User:", res_auth$first_name))
   })
+
+
+  # ---- Modell-Check Modal ----
+  observeEvent(input$model_check_btn, {
+    req(species_list(), input$species_lang)
+
+    df <- species_list()
+    labels <- switch(input$species_lang,
+                     "de"  = df$species_long_de,
+                     "en"  = df$species_long_en,
+                     "sci" = df$species_scientific)
+    labels[is.na(labels) | labels == ""] <- as.character(df$species_id[is.na(labels) | labels == ""])
+    choices <- setNames(as.character(df$species_id), labels)
+    choices <- choices[order(names(choices))]
+
+    showModal(modalDialog(
+      title = "Modell-Check: BirdNET Score → True Positive",
+      size = "l",
+      easyClose = TRUE,
+
+      fluidRow(
+        column(6, selectInput("mc_species", "Art auswählen:", choices = choices)),
+        column(6, br(), actionButton("mc_run", "Berechnen",
+                                     icon = icon("calculator"),
+                                     style = "background-color: #337ab7; color: white; margin-top: 5px;"))
+      ),
+      hr(),
+      plotOutput("mc_plot", height = "450px"),
+
+      footer = modalButton("Schließen")
+    ))
+  })
+
+  # Berechnung NUR wenn Button im Modal gedrückt wird
+  observeEvent(input$mc_run, {
+    req(input$mc_species, input$selected_project)
+
+    sp_id <- as.integer(input$mc_species)
+    df_sp <- species_list()
+
+    # Artname für Plot-Titel
+    sp_row <- df_sp[df_sp$species_id == sp_id, ]
+    sp_name <- if(nrow(sp_row) > 0) {
+      switch(input$species_lang,
+             "de"  = sp_row$species_long_de,
+             "en"  = sp_row$species_long_en,
+             "sci" = sp_row$species_scientific)
+    } else paste("Species", sp_id)
+
+    # Daten holen
+    glm_df <- get_glm_data(pool, as.integer(input$selected_project), sp_id)
+
+    output$mc_plot <- renderPlot({
+      if(nrow(glm_df) == 0) {
+        plot.new()
+        text(0.5, 0.5, "Keine annotierten Daten für diese Art.",
+             cex = 1.4, col = "red")
+      } else {
+        plot_glm_check(glm_df, species_name = sp_name)
+      }
+    })
+  })
+
 }

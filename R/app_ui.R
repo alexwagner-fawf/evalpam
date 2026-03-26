@@ -97,17 +97,42 @@ app_ui <- function(request) {
           # --- INFO TABELLE ---
           h5("BirdNET Detektionen:"),
           DT::DTOutput('table_bnet'),
+          hr(),
+          actionButton(
+            "model_check_btn", "Modell-Check",
+            icon = icon("chart-line"),
+            style = "width: 100%; background-color: #5cb85c; color: white; border-color: #4cae4c;"
+          ),
 
           br(),
           uiOutput("plot_info")
         ),
 
         # ---- Main Panel ----
+        # mainPanel(
+        #   width = 8,
+        #   h2("Spektrogramm"),
+        #   video::video(elementId = "video", files = NULL)
+        # )
         mainPanel(
           width = 8,
           h2("Spektrogramm"),
-          video::video(elementId = "video", files = NULL)
+          # Waveform (kleine Übersicht oben)
+          div(id = "waveform",
+              style = "background: #1a1a2e; border-radius: 4px 4px 0 0; padding: 4px;"),
+          # Spektrogramm (Hauptansicht)
+          div(id = "spectrogram",
+              style = "background: #1a1a2e; border-radius: 0 0 4px 4px; margin-bottom: 10px;"),
+          # Legende
+          div(style = "font-size: 12px; color: #888; margin-top: 4px;",
+              icon("square", style = "color: rgba(51,122,183,0.4);"), " Detektionsfenster",
+              span(style = "margin-left: 15px;"),
+              icon("square", style = "color: rgba(0,0,0,0.5);"), " Kontext (Padding)",
+              span(style = "margin-left: 15px;"),
+              "Klick auf Waveform = Play/Pause"
+          )
         )
+
       )
     )
   )
@@ -136,6 +161,14 @@ golem_add_external_resources <- function() {
     warning(paste("ACHTUNG: Spektrogramm-Ordner nicht gefunden unter:", spec_path))
   }
   # -------------------------------
+  tagList(
+    tags$head(
+      favicon(),
+      bundle_resources(path = app_sys("app/www"), app_title = "evalpam"),
+      # Wavesurfer.js als ES-Modul laden
+      tags$script(type = "module", src = "www/wavesurfer_init.js")
+    )
+  )
 
-  tags$head(favicon(), bundle_resources(path = app_sys("app/www"), app_title = "evalpam"))
+  # tags$head(favicon(), bundle_resources(path = app_sys("app/www"), app_title = "evalpam")) # only for video
 }
