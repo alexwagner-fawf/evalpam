@@ -167,10 +167,11 @@ app_server <- function(input, output, session, pool) {
         CAST(r.begin_time_ms AS FLOAT) / 1000.0 as start,
         CAST(r.end_time_ms AS FLOAT) / 1000.0 as end_sec,
         -- Pfad Konstruktion
-        --  CAST(s.spectrogram_id AS TEXT) || '.mp4' as path, for video
-        CAST(s.spectrogram_id AS TEXT) || '.mp3' as path,
+        --  CAST(s.spectrogram_id AS TEXT) || '.mp3' as path, for mp3 js version change all!
+        CAST(s.spectrogram_id AS TEXT) || '.mp4' as path,
         s.buffer_ms,
         af.audio_file_id,
+        af.sample_rate,
         af.required_annotation_type_id,
         lt.annotation_type_description,
         sp.species_id,
@@ -261,46 +262,55 @@ app_server <- function(input, output, session, pool) {
       dplyr::arrange(desc(score))
   })
 
-  # Video Player Logic
-  # observeEvent(input$seq, {
-  #   req(input$seq, project_data())
-  #   row_data <- project_data() |> dplyr::filter(path == input$seq)
-  #
-  #   if(nrow(row_data) > 0) {
-  #     buffer_val <- row_data$buffer_ms[1]
-  #     seek_target <- max(0, buffer_val - 2)
-  #
-  #     # Video Pfad: Wir nehmen an, dass 'spectrograms' als Resource Path gesetzt ist
-  #     video::changeVideo("video", paste0("spectrograms/", input$seq))
-  #
-  #     shinyjs::delay(750, { # Delay etwas erhöht für Stabilität
-  #       try({
-  #         video::seekVideo("video", seek = seek_target)
-  #         video::playVideo("video")
-  #       }, silent = TRUE)
-  #     })
-  #   }
-  # })
-
+  #Video Player Logic
   observeEvent(input$seq, {
     req(input$seq, project_data())
     row_data <- project_data() |> dplyr::filter(path == input$seq)
 
     if(nrow(row_data) > 0) {
-      buffer_val <- row_data$buffer_ms[1]  # Sekunden bis Detektion
+      buffer_val <- row_data$buffer_ms[1]
       seek_target <- max(0, buffer_val - 2)
-      analysis_range <- 3  # BirdNET Fenster in Sekunden
 
-      session$sendCustomMessage("ws_load", list(
-        url = paste0("spectrograms/", input$seq),
-        seek = seek_target,
-        detection_start = buffer_val,
-        detection_end = buffer_val + analysis_range,
-        freq_max = 15000
-      ))
+      # Video Pfad: Wir nehmen an, dass 'spectrograms' als Resource Path gesetzt ist
+      video::changeVideo("video", paste0("spectrograms/", input$seq))
+
+      shinyjs::delay(750, { # Delay etwas erhöht für Stabilität
+        try({
+          video::seekVideo("video", seek = seek_target)
+          video::playVideo("video")
+        }, silent = TRUE)
+      })
     }
   })
 
+  # =====================================================================
+  # ALTERNATIVE: Interactive JS Spectrogram (Wavesurfer)
+  # Currently deactivated in favor of the more stable MP4 video version.
+  # Uncomment if needed and ensure the paths are updated to .mp3 files.
+  # =====================================================================
+
+  # observeEvent(input$seq, {
+  #   req(input$seq, project_data())
+  #   row_data <- project_data() |> dplyr::filter(path == input$seq)
+  #
+  #   if(nrow(row_data) > 0) {
+  #     buffer_val <- row_data$buffer_ms[1]  # Sekunden bis Detektion
+  #     seek_target <- max(0, buffer_val - 2)
+  #     analysis_range <- 3  # BirdNET Fenster in Sekunden
+  #
+  #     sr <- row_data$sample_rate[1]
+  #     max_freq <- if(is.na(sr)) 15000L else as.integer(sr / 2)
+  #
+  #     session$sendCustomMessage("ws_load", list(
+  #       url = paste0("spectrograms/", input$seq),
+  #       seek = seek_target,
+  #       detection_start = buffer_val,
+  #       detection_end = buffer_val + analysis_range,
+  #       freq_max = max_freq
+  #     ))
+  #
+  #   }
+  # })
 
   #C: "Smart Species Selection"
   observeEvent(input$seq, {
