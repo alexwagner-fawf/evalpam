@@ -165,30 +165,37 @@ if (length(remaining_deployments) == 0) {
     dplyr::mutate(geometry_wkt = sf::st_as_text(geometry)) |>
     sf::st_drop_geometry()
 
+  # Pre-split audio_files by deployment so each worker only receives the rows
+  # it needs. With 1M+ total audio files, passing the full data frame to every
+  # worker wastes memory and serialisation time. future_mapply varies the
+  # audio_files argument per call while keeping all other args constant.
+  audio_files_by_dep <- split(audio_files, audio_files$deployment_id)
+  # Guard: ensure every remaining deployment has an entry (may be empty)
+  missing_dep_keys <- setdiff(as.character(remaining_deployments),
+                              names(audio_files_by_dep))
+  for (d in missing_dep_keys) audio_files_by_dep[[d]] <- audio_files[0L, ]
+
   plan(multisession, workers = N_WORKERS)
 
-  temp_files <- future_lapply(
-    as.integer(remaining_deployments),
-    FUN                      = process_deployment_worker,
-    deployments              = deployments_export,
-    audio_files              = audio_files,
-    species                  = species,
-    temporal_filtering       = temporal_filtering,
-    occurence_min_confidence = occurence_min_confidence,
-    birdnet_params_list      = birdnet_params_list,
-    python_path              = PYTHON_PATH,
-    temp_results_folder      = temp_results_folder,
-    future.seed              = TRUE
+  temp_files <- future.apply::future_mapply(
+    FUN           = process_deployment_worker,
+    deployment_id = as.integer(remaining_deployments),
+    audio_files   = audio_files_by_dep[as.character(remaining_deployments)],
+    MoreArgs = list(
+      deployments              = deployments_export,
+      species                  = species,
+      temporal_filtering       = temporal_filtering,
+      occurence_min_confidence = occurence_min_confidence,
+      birdnet_params_list      = birdnet_params_list,
+      python_path              = PYTHON_PATH,
+      temp_results_folder      = temp_results_folder
+    ),
+    SIMPLIFY    = FALSE,
+    future.seed = TRUE
   )
 }
 
 # ── Aggregation ───────────────────────────────────────────────────────────────
-
-birdnet_inference <- list.files(temp_results_folder,
-                                full.names = TRUE,
-                                pattern    = "\\.fst$") |>
-  lapply(fst::read_fst) |>
-  dplyr::bind_rows()
 
 # Local index: tracks (audio_file_id, settings_id) pairs already processed
 # to skip re-uploads and allow incremental runs.
@@ -215,6 +222,46 @@ if (file.exists(index_file)) {
     analysed_at   = as.POSIXct(character(0))
   )
 }
+
+# Pre-filter temp fst files to skip deployments already fully indexed.
+# For projects with > 100 deployments, this avoids loading GBs of previously
+# processed results into RAM just to discard them via anti_join.
+#
+# A deployment is "fully indexed" when every audio_file_id belonging to it
+# has at least one successful index entry. We derive this from `audio_files`
+# (already in memory from the DB query above) and the in-memory index.
+all_temp_fst_files <- list.files(temp_results_folder,
+                                 full.names = TRUE,
+                                 pattern    = "\\.fst$")
+
+if (nrow(inference_index) > 0 && length(all_temp_fst_files) > 0) {
+  indexed_af_ids <- inference_index |>
+    dplyr::filter(status == "success") |>
+    dplyr::pull(audio_file_id)
+
+  # Deployments where all audio files have a success entry
+  fully_indexed_dep_ids <- audio_files |>
+    dplyr::group_by(deployment_id) |>
+    dplyr::filter(all(audio_file_id %in% indexed_af_ids)) |>
+    dplyr::pull(deployment_id) |>
+    unique()
+
+  temp_fst_to_load <- all_temp_fst_files[
+    !(tools::file_path_sans_ext(basename(all_temp_fst_files)) %in%
+        as.character(fully_indexed_dep_ids))
+  ]
+
+  n_skipped <- length(all_temp_fst_files) - length(temp_fst_to_load)
+  if (n_skipped > 0)
+    message(sprintf("Skipping %d fully-indexed deployment temp file(s); loading %d.",
+                    n_skipped, length(temp_fst_to_load)))
+} else {
+  temp_fst_to_load <- all_temp_fst_files
+}
+
+birdnet_inference <- temp_fst_to_load |>
+  lapply(fst::read_fst) |>
+  dplyr::bind_rows()
 
 # Skip files already successfully indexed. Re-process previously failed files
 # (allows recovery after transient errors on a re-run).

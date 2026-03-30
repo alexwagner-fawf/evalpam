@@ -29,6 +29,10 @@
 #' @param list_files_min_stable_scans Integer. Consecutive identical scans
 #'   required to accept a directory listing. Only used when
 #'   \code{list_files_verify = TRUE}. Default is 2.
+#' @param exif_chunk_size Integer. Maximum number of files passed to ExifTool in
+#'   a single call. Smaller values reduce the blast radius of transient errors on
+#'   network drives (a failed chunk is retried without re-reading already
+#'   processed files). Default is 500.
 #' @param default_required_annotation_type_id Integer. Default annotation type
 #'   ID to assign to all audio files. Default is 3.
 #'
@@ -65,6 +69,7 @@ retrieve_local_file_info <- function(project_id,
                                      list_files_retries = 3,
                                      list_files_verify = TRUE,
                                      list_files_min_stable_scans = 2,
+                                     exif_chunk_size = 500L,
                                      default_required_annotation_type_id = 3) {
 
   project_folder <- normalizePath(project_folder, winslash = "/", mustWork = FALSE)
@@ -153,7 +158,10 @@ retrieve_local_file_info <- function(project_id,
 
       audio_files_norm <- normalizePath(audio_files, winslash = "/", mustWork = FALSE)
 
-      # Phase 2: EXIF reading with per-file retry
+      # Phase 2: EXIF reading with per-file retry and chunking.
+      # Processing in chunks of exif_chunk_size limits the blast radius of
+      # transient network errors: a failed chunk covers at most exif_chunk_size
+      # files, and already-processed chunks are not re-read on retry.
       audio_files_remaining <- audio_files_norm
       audio_files_table_raw <- dplyr::tibble(SourceFile = character(),
                                              Duration   = double())
@@ -161,48 +169,53 @@ retrieve_local_file_info <- function(project_id,
 
       while (length(audio_files_remaining) > 0 && n_retries < 5) {
         n_retries <- n_retries + 1
-        message("  EXIF attempt #", n_retries,
-                " (", length(audio_files_remaining), " files remaining)")
+        files_this_attempt <- audio_files_remaining
+        n_chunks <- ceiling(length(files_this_attempt) / exif_chunk_size)
 
-        tryCatch({
-          exif_try <- exiftoolr::exif_read(
-            audio_files_remaining,
-            recursive = FALSE,
-            tags      = c("SourceFile", "SampleRate", "FileModifyDate",
-                          "Duration", "CreateDate", "MediaCreateDate"),
-            quiet     = TRUE
-          ) |>
-            dplyr::mutate(
-              SourceFile = normalizePath(SourceFile, winslash = "/", mustWork = FALSE)
-            )
+        message(sprintf("  EXIF attempt #%d: %d file(s) in %d chunk(s) of up to %d",
+                        n_retries, length(files_this_attempt), n_chunks, exif_chunk_size))
 
-          audio_files_table_raw <- dplyr::bind_rows(audio_files_table_raw, exif_try)
-          audio_files_remaining <- setdiff(audio_files_remaining,
-                                           audio_files_table_raw$SourceFile)
-        },
-        error = function(e) {
-          message("  exiftool error on attempt ", n_retries, ": ", conditionMessage(e))
-          # Only call file.exists() here — on the error path — not before every
-          # attempt. This avoids O(N) stat() calls per retry on large deployments
-          # on network shares where stat itself can be slow or hang.
-          #
-          # Distinguish two cases:
-          #   - file.exists() FALSE  → dead symlink / truly gone → remove permanently
-          #   - file.exists() TRUE   → transiently unreachable (exiftool failed
-          #                            for another reason) → keep for next retry
-          #
-          # Risk: if the network is so broken that file.exists() also returns FALSE
-          # for a real file at the same moment exiftool errors, the file is lost for
-          # this scan. The outer warning will list it, and force_exif=TRUE on the
-          # next run will pick it up.
-          gone <- audio_files_remaining[!file.exists(audio_files_remaining)]
-          if (length(gone) > 0) {
-            message("  permanently removing ", length(gone),
-                    " unresolvable file(s) from retry list: ",
-                    paste(basename(gone), collapse = ", "))
-            audio_files_remaining <<- setdiff(audio_files_remaining, gone)
-          }
-        })
+        for (k in seq_len(n_chunks)) {
+          chunk_files <- files_this_attempt[
+            seq((k - 1L) * exif_chunk_size + 1L,
+                min(k * exif_chunk_size, length(files_this_attempt)))
+          ]
+          # A successful earlier chunk in this attempt may have already removed
+          # some files from audio_files_remaining; skip those.
+          chunk_files <- intersect(chunk_files, audio_files_remaining)
+          if (length(chunk_files) == 0) next
+
+          tryCatch({
+            exif_try <- exiftoolr::exif_read(
+              chunk_files,
+              recursive = FALSE,
+              tags      = c("SourceFile", "SampleRate", "FileModifyDate",
+                            "Duration", "CreateDate", "MediaCreateDate"),
+              quiet     = TRUE
+            ) |>
+              dplyr::mutate(
+                SourceFile = normalizePath(SourceFile, winslash = "/", mustWork = FALSE)
+              )
+
+            audio_files_table_raw <- dplyr::bind_rows(audio_files_table_raw, exif_try)
+            audio_files_remaining  <- setdiff(audio_files_remaining,
+                                              audio_files_table_raw$SourceFile)
+          },
+          error = function(e) {
+            message(sprintf("  chunk %d/%d error on attempt %d: %s",
+                            k, n_chunks, n_retries, conditionMessage(e)))
+            # Only call file.exists() on the error path (not the hot path).
+            # FALSE → dead symlink / permanently gone → remove from retry list.
+            # TRUE  → transient failure → keep for next retry attempt.
+            gone <- chunk_files[!file.exists(chunk_files)]
+            if (length(gone) > 0) {
+              message("  permanently removing ", length(gone),
+                      " unresolvable file(s): ",
+                      paste(basename(gone), collapse = ", "))
+              audio_files_remaining <<- setdiff(audio_files_remaining, gone)
+            }
+          })
+        }
       }
 
       if (length(audio_files_remaining) > 0) {
@@ -407,8 +420,6 @@ find_audio_files <- function(folder,
                              verify_complete  = TRUE,
                              min_stable_scans = 2) {
 
-  all_files <- character(0)
-
   # Phase 1: stable directory listing
   dirs <- NULL
   for (attempt in seq_len(max_retries)) {
@@ -450,6 +461,9 @@ find_audio_files <- function(folder,
   message(sprintf("  Found %d directories to scan", length(dirs)))
 
   # Phase 2: per-directory file listing with verification
+  # Pre-allocate a list to avoid O(N²) copies from repeated c() on a growing vector.
+  all_files_list <- vector("list", length(dirs))
+
   for (i in seq_along(dirs)) {
     d <- dirs[i]
 
@@ -504,8 +518,8 @@ find_audio_files <- function(folder,
       dir_files <- last_result
     }
 
-    if (!is.null(dir_files)) all_files <- c(all_files, dir_files)
+    if (!is.null(dir_files)) all_files_list[[i]] <- dir_files
   }
 
-  unique(all_files)
+  unique(unlist(all_files_list, use.names = FALSE))
 }
