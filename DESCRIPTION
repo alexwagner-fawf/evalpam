@@ -17,7 +17,9 @@ Imports:
     dbplyr,
     dplyr,
     DT,
-    exifr,
+    exiftoolr,
+    fs,
+    fst,
     golem,
     here,
     jsonlite,
@@ -32,6 +34,7 @@ Imports:
     shinymanager,
     shinyWidgets,
     stringi,
+    stringr,
     tidyr,
     video
 Suggests: 
