@@ -112,56 +112,46 @@ app_ui <- function(request) {
         mainPanel(
           width = 8,
           h2("Spektrogramm"),
-          video::video(elementId = "video", files = NULL)
+
+          # Controls (Play, Zeit)
+          div(style = "display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
+                        background: #2c3e50; padding: 8px 14px; border-radius: 4px;",
+              tags$button(id = "ws-play-btn",
+                          style = "font-size: 22px; background: none; border: none; color: white;
+                                   cursor: pointer; padding: 2px 8px;",
+                          "\u25B6"),
+              tags$span(id = "ws-current-time", style = "color: #eee; font-family: monospace; font-size: 14px;", "0:00.0"),
+              tags$span(style = "color: #888;", "/"),
+              tags$span(id = "ws-total-time", style = "color: #aaa; font-family: monospace; font-size: 14px;", "0:00.0")
+          ),
+
+          # Waveform
+          div(id = "waveform",
+              style = "background: #1a1a2e; border-radius: 4px 4px 0 0; padding: 4px;"),
+
+          # Timeline
+          div(id = "timeline",
+              style = "background: #1a1a2e; padding: 0 4px;"),
+
+          # Spektrogramm
+          div(id = "spectrogram",
+              style = "background: #1a1a2e; border-radius: 0 0 4px 4px;"),
+
+          # Legende
+          div(style = "font-size: 12px; color: #888; margin-top: 6px;",
+              tags$span(style = "display:inline-block; width:12px; height:12px;
+                                  background:rgba(46,204,113,0.3); border:1px solid #2ecc71;
+                                  vertical-align:middle; margin-right:4px;"),
+              "Detektionsfenster",
+              tags$span(style = "margin-left: 15px;"),
+              tags$span(style = "display:inline-block; width:12px; height:12px;
+                                  background:rgba(0,0,0,0.4); border:1px solid #555;
+                                  vertical-align:middle; margin-right:4px;"),
+              "Kontext (Padding)",
+              tags$span(style = "margin-left: 15px; color: #aaa;",
+                        "Klick auf Waveform = Play/Pause")
+          )
         )
-        # =====================================================================
-        # ALTERNATIVE: Interactive JS Spectrogram (Wavesurfer)
-        # Currently deactivated in favor of the more stable MP4 video version.
-        # Uncomment if needed and ensure the paths are updated to .mp3 files.
-        # =====================================================================
-        # mainPanel(
-        #   width = 8,
-        #   h2("Spektrogramm"),
-        #
-        #   # Controls (Play, Zeit)
-        #   div(style = "display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
-        #                 background: #2c3e50; padding: 8px 14px; border-radius: 4px;",
-        #       tags$button(id = "ws-play-btn",
-        #                   style = "font-size: 22px; background: none; border: none; color: white;
-        #                            cursor: pointer; padding: 2px 8px;",
-        #                   "\u25B6"),
-        #       tags$span(id = "ws-current-time", style = "color: #eee; font-family: monospace; font-size: 14px;", "0:00.0"),
-        #       tags$span(style = "color: #888;", "/"),
-        #       tags$span(id = "ws-total-time", style = "color: #aaa; font-family: monospace; font-size: 14px;", "0:00.0")
-        #   ),
-        #
-        #   # Waveform
-        #   div(id = "waveform",
-        #       style = "background: #1a1a2e; border-radius: 4px 4px 0 0; padding: 4px;"),
-        #
-        #   # Timeline
-        #   div(id = "timeline",
-        #       style = "background: #1a1a2e; padding: 0 4px;"),
-        #
-        #   # Spektrogramm
-        #   div(id = "spectrogram",
-        #       style = "background: #1a1a2e; border-radius: 0 0 4px 4px;"),
-        #
-        #   # Legende
-        #   div(style = "font-size: 12px; color: #888; margin-top: 6px;",
-        #       tags$span(style = "display:inline-block; width:12px; height:12px;
-        #                           background:rgba(46,204,113,0.3); border:1px solid #2ecc71;
-        #                           vertical-align:middle; margin-right:4px;"),
-        #       "Detektionsfenster",
-        #       tags$span(style = "margin-left: 15px;"),
-        #       tags$span(style = "display:inline-block; width:12px; height:12px;
-        #                           background:rgba(0,0,0,0.4); border:1px solid #555;
-        #                           vertical-align:middle; margin-right:4px;"),
-        #       "Kontext (Padding)",
-        #       tags$span(style = "margin-left: 15px; color: #aaa;",
-        #                 "Klick auf Waveform = Play/Pause")
-        #   )
-        # )
 
 
       )
@@ -204,5 +194,11 @@ golem_add_external_resources <- function() {
   #   )
   # )
 
-  tags$head(favicon(), bundle_resources(path = app_sys("app/www"), app_title = "evalpam")) # only for video
+  tagList(
+    tags$head(
+      favicon(),
+      bundle_resources(path = app_sys("app/www"), app_title = "evalpam"),
+      tags$script(type = "module", src = "www/wavesurfer_init.js")
+    )
+  )
 }

@@ -167,8 +167,7 @@ app_server <- function(input, output, session, pool) {
         CAST(r.begin_time_ms AS FLOAT) / 1000.0 as start,
         CAST(r.end_time_ms AS FLOAT) / 1000.0 as end_sec,
         -- Pfad Konstruktion
-        --  CAST(s.spectrogram_id AS TEXT) || '.mp3' as path, for mp3 js version change all!
-        CAST(s.spectrogram_id AS TEXT) || '.mp4' as path,
+        CAST(s.spectrogram_id AS TEXT) || '.mp3' as path,
         s.buffer_ms,
         af.audio_file_id,
         af.sample_rate,
@@ -223,7 +222,7 @@ app_server <- function(input, output, session, pool) {
     if(!is.null(target_id)) {
       if(mode == "binary") {
         q_done <- "
-          SELECT CAST(s.spectrogram_id AS TEXT) || '.mp4' as path
+          SELECT CAST(s.spectrogram_id AS TEXT) || '.mp3' as path
           FROM import.annotation_status ast
           JOIN import.spectrograms s
             ON ast.audio_file_id = s.audio_file_id
@@ -233,7 +232,7 @@ app_server <- function(input, output, session, pool) {
         done <- DBI::dbGetQuery(pool, q_done, params = list(target_id))$path
       } else {
         q_done <- "
-          SELECT CAST(s.spectrogram_id AS TEXT) || '.mp4' as path
+          SELECT CAST(s.spectrogram_id AS TEXT) || '.mp3' as path
           FROM import.annotation_status ast
           JOIN import.spectrograms s
             ON ast.audio_file_id = s.audio_file_id
@@ -262,55 +261,52 @@ app_server <- function(input, output, session, pool) {
       dplyr::arrange(desc(score))
   })
 
-  #Video Player Logic
+  # Wavesurfer Player Logic
   observeEvent(input$seq, {
     req(input$seq, project_data())
     row_data <- project_data() |> dplyr::filter(path == input$seq)
 
-    if(nrow(row_data) > 0) {
-      buffer_val <- row_data$buffer_ms[1]
-      seek_target <- max(0, buffer_val - 2)
+    if (nrow(row_data) > 0) {
+      buffer_val      <- row_data$buffer_ms[1]
+      seek_target     <- max(0, buffer_val - 2)
+      analysis_range  <- 3L  # BirdNET detection window in seconds
 
-      # Video Pfad: Wir nehmen an, dass 'spectrograms' als Resource Path gesetzt ist
-      video::changeVideo("video", paste0("spectrograms/", input$seq))
+      sr       <- row_data$sample_rate[1]
+      max_freq <- if (is.na(sr)) 15000L else as.integer(sr / 2L)
 
-      shinyjs::delay(750, { # Delay etwas erhöht für Stabilität
-        try({
-          video::seekVideo("video", seek = seek_target)
-          video::playVideo("video")
-        }, silent = TRUE)
-      })
+      # Resolve local spectrogram folder (mirrors golem_add_external_resources logic)
+      spec_path <- Sys.getenv("spectrogram_folder")
+      if (spec_path == "") spec_path <- "spectrograms"
+
+      local_file <- file.path(spec_path, input$seq)
+
+      # DB fallback: if the MP3 is not on disk, fetch from database blob and cache it
+      if (!file.exists(local_file)) {
+        spec_id <- tools::file_path_sans_ext(input$seq)
+        blob_row <- tryCatch(
+          DBI::dbGetQuery(
+            pool,
+            "SELECT audio_data FROM import.spectrograms WHERE spectrogram_id = $1",
+            params = list(as.integer(spec_id))
+          ),
+          error = function(e) NULL
+        )
+
+        if (!is.null(blob_row) && nrow(blob_row) > 0 && !is.null(blob_row$audio_data[[1]])) {
+          dir.create(spec_path, showWarnings = FALSE, recursive = TRUE)
+          writeBin(blob_row$audio_data[[1]], local_file)
+        }
+      }
+
+      session$sendCustomMessage("ws_load", list(
+        url             = paste0("spectrograms/", input$seq),
+        seek            = seek_target,
+        detection_start = buffer_val,
+        detection_end   = buffer_val + analysis_range,
+        freq_max        = max_freq
+      ))
     }
   })
-
-  # =====================================================================
-  # ALTERNATIVE: Interactive JS Spectrogram (Wavesurfer)
-  # Currently deactivated in favor of the more stable MP4 video version.
-  # Uncomment if needed and ensure the paths are updated to .mp3 files.
-  # =====================================================================
-
-  # observeEvent(input$seq, {
-  #   req(input$seq, project_data())
-  #   row_data <- project_data() |> dplyr::filter(path == input$seq)
-  #
-  #   if(nrow(row_data) > 0) {
-  #     buffer_val <- row_data$buffer_ms[1]  # Sekunden bis Detektion
-  #     seek_target <- max(0, buffer_val - 2)
-  #     analysis_range <- 3  # BirdNET Fenster in Sekunden
-  #
-  #     sr <- row_data$sample_rate[1]
-  #     max_freq <- if(is.na(sr)) 15000L else as.integer(sr / 2)
-  #
-  #     session$sendCustomMessage("ws_load", list(
-  #       url = paste0("spectrograms/", input$seq),
-  #       seek = seek_target,
-  #       detection_start = buffer_val,
-  #       detection_end = buffer_val + analysis_range,
-  #       freq_max = max_freq
-  #     ))
-  #
-  #   }
-  # })
 
   #C: "Smart Species Selection"
   observeEvent(input$seq, {
