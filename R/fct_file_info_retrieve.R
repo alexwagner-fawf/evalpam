@@ -161,29 +161,12 @@ retrieve_local_file_info <- function(project_id,
 
       while (length(audio_files_remaining) > 0 && n_retries < 5) {
         n_retries <- n_retries + 1
-
-        # Pre-filter: drop files that do not resolve (dead symlinks, truly gone).
-        # file.exists() returns FALSE for dead symlinks and missing files.
-        # On a healthy network drive this is a no-op; on a flaky one it only
-        # removes files that are verifiably absent right now — they remain in
-        # audio_files_remaining so subsequent retries can still pick them up if
-        # they reappear (handled by setdiff below).
-        readable <- audio_files_remaining[file.exists(audio_files_remaining)]
-        unreadable_now <- setdiff(audio_files_remaining, readable)
-        if (length(unreadable_now) > 0) {
-          message("  ", length(unreadable_now),
-                  " file(s) not accessible, skipping this attempt: ",
-                  paste(basename(unreadable_now), collapse = ", "))
-        }
-
         message("  EXIF attempt #", n_retries,
-                " (", length(readable), " readable files)")
+                " (", length(audio_files_remaining), " files remaining)")
 
-        if (length(readable) == 0) break
-
-        try({
+        tryCatch({
           exif_try <- exiftoolr::exif_read(
-            readable,
+            audio_files_remaining,
             recursive = FALSE,
             tags      = c("SourceFile", "SampleRate", "FileModifyDate",
                           "Duration", "CreateDate", "MediaCreateDate"),
@@ -193,9 +176,32 @@ retrieve_local_file_info <- function(project_id,
               SourceFile = normalizePath(SourceFile, winslash = "/", mustWork = FALSE)
             )
 
-          audio_files_table_raw   <- dplyr::bind_rows(audio_files_table_raw, exif_try)
-          audio_files_remaining   <- setdiff(audio_files_remaining,
-                                             audio_files_table_raw$SourceFile)
+          audio_files_table_raw <- dplyr::bind_rows(audio_files_table_raw, exif_try)
+          audio_files_remaining <- setdiff(audio_files_remaining,
+                                           audio_files_table_raw$SourceFile)
+        },
+        error = function(e) {
+          message("  exiftool error on attempt ", n_retries, ": ", conditionMessage(e))
+          # Only call file.exists() here — on the error path — not before every
+          # attempt. This avoids O(N) stat() calls per retry on large deployments
+          # on network shares where stat itself can be slow or hang.
+          #
+          # Distinguish two cases:
+          #   - file.exists() FALSE  → dead symlink / truly gone → remove permanently
+          #   - file.exists() TRUE   → transiently unreachable (exiftool failed
+          #                            for another reason) → keep for next retry
+          #
+          # Risk: if the network is so broken that file.exists() also returns FALSE
+          # for a real file at the same moment exiftool errors, the file is lost for
+          # this scan. The outer warning will list it, and force_exif=TRUE on the
+          # next run will pick it up.
+          gone <- audio_files_remaining[!file.exists(audio_files_remaining)]
+          if (length(gone) > 0) {
+            message("  permanently removing ", length(gone),
+                    " unresolvable file(s) from retry list: ",
+                    paste(basename(gone), collapse = ", "))
+            audio_files_remaining <<- setdiff(audio_files_remaining, gone)
+          }
         })
       }
 
