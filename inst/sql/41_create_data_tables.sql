@@ -164,6 +164,7 @@ CREATE TABLE IF NOT EXISTS import.ground_truth_annotations (
     is_present boolean NOT NULL DEFAULT TRUE,
     behavior_id integer,
     certainty_id smallint DEFAULT 1,
+    abiotic_sound_id smallint,
     created_at timestamptz DEFAULT NOW(),
 
     CONSTRAINT ground_truth_pkey PRIMARY KEY (annotation_id),
@@ -171,6 +172,7 @@ CREATE TABLE IF NOT EXISTS import.ground_truth_annotations (
     CONSTRAINT ground_truth_user_fkey FOREIGN KEY (user_id) REFERENCES public.app_users (user_id),
     CONSTRAINT ground_truth_species_fkey FOREIGN KEY (species_id) REFERENCES public.lut_species_code (species_id),
     CONSTRAINT ground_truth_behavior_fkey FOREIGN KEY (behavior_id) REFERENCES public.lut_behavior_code (behavior_id),
+    CONSTRAINT ground_truth_abiotic_sound_fkey FOREIGN KEY (abiotic_sound_id) REFERENCES public.lut_abiotic_sound_code (abiotic_sound_id),
 
     -- Constraint: Zeit muss positiv sein
     CONSTRAINT check_valid_gt_time CHECK (begin_time_ms < end_time_ms),

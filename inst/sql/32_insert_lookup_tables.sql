@@ -6572,6 +6572,25 @@ VALUES
  'Negative check: Section has been reviewed and confirmed to contain no relevant events.');
 
 
+-- INSERT ABIOTIC SOUND CODES in public.lut_abiotic_sound_code
+
+INSERT INTO public.lut_abiotic_sound_code (abiotic_sound_short, abiotic_sound_long_de, abiotic_sound_long_en) VALUES
+  ('TRANSPORT',   'Verkehr (Straße, Schiene)',       'Road / rail traffic'),
+  ('AIRCRAFT',    'Luftfahrzeug',                    'Aircraft'),
+  ('WIND',        'Wind',                            'Wind'),
+  ('THUNDER',     'Donner',                          'Thunder'),
+  ('RAIN',        'Regen',                           'Rain'),
+  ('BRANCHES',    'Bewegte Äste / Laub',             'Moving branches / foliage'),
+  ('WATER',       'Fließendes Wasser',               'Running water'),
+  ('MACHINERY',   'Maschinen / technische Geräte',   'Machinery / technical equipment'),
+  ('HUMAN',       'Menschliche Stimme / Aktivität',  'Human voice / activity'),
+  ('ANIMAL_DOM',  'Haustiere (Hund, Kuh u.ä.)',      'Domestic animals (dog, cow, etc.)'),
+  ('INSECTS',     'Insekten',                        'Insects'),
+  ('UNSPECIFIED', 'Unspezifisch',                    'Unspecified'),
+  ('OTHER',       'Sonstiges',                       'Other')
+ON CONFLICT DO NOTHING;
+
+
 
 
 
