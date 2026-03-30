@@ -53,8 +53,11 @@ process_deployment_birdnet <- function(deployment_id,
     bnm <- model_info$bnm
     birdnet_params <- model_info$birdnet_params
 
-    settings_id <- upsert_birdnet_settings(internal_pool, bnm, birdnet_params)
+    # get_possible_species must run before upsert_birdnet_settings so species_ids
+    # can be written to settings_species in the same transaction
     possible_species <- get_possible_species(bnm$species, species)
+    settings_id <- upsert_birdnet_settings(internal_pool, bnm, birdnet_params,
+                                           species_ids = possible_species$species_id)
 
     birdnet_inference_list_weekly[[week_i]] <- run_birdnet_inference(audio_files_subset,
                                                                      bnm,
@@ -130,7 +133,7 @@ prepare_birdnet_model <- function(latitude, longitude, week, min_confidence, bir
 }
 
 #' @keywords internal
-upsert_birdnet_settings <- function(pool, bnm, birdnet_params) {
+upsert_birdnet_settings <- function(pool, bnm, birdnet_params, species_ids) {
   settings <- data.frame(
     model_name = bnm$model_name,
     model_version = bnm$model_version,
@@ -149,7 +152,7 @@ upsert_birdnet_settings <- function(pool, bnm, birdnet_params) {
     new_settings_id <- upsert_settings_df(pool, settings)
     replace_settings_species(conn = pool,
                              settings_id = as.integer(new_settings_id),
-                             species_id = as.integer(birdnet_params$species_ids))
+                             species_id = as.integer(na.omit(species_ids)))
   } else {
     new_settings_id <- existing$settings_id[1]
   }
@@ -158,12 +161,20 @@ upsert_birdnet_settings <- function(pool, bnm, birdnet_params) {
 
 #' @keywords internal
 get_possible_species <- function(bnm_species, species_lut) {
-  species_list <- data.frame(
-    species_scientific = (bnm_species$label |> stringr::str_split("_", simplify = TRUE, n = 2))[,1]
-  )
-  species_list |>
-    dplyr::left_join(species_lut, by = "species_scientific") |>
-    dplyr::select(species_scientific, species_id)
+  # bnm$species is NULL when occurence_min_confidence == 0 (no location filter)
+  if (is.null(bnm_species)) {
+    species_list <- species_lut |>
+      dplyr::select(species_scientific, species_id)
+  } else {
+    # BirdNET label format: "Genus species_Common Name" — split on first underscore
+    species_list <- data.frame(
+      species_scientific = (bnm_species$label |> stringr::str_split("_", simplify = TRUE, n = 2))[, 1]
+    ) |>
+      dplyr::left_join(species_lut, by = "species_scientific") |>
+      dplyr::select(species_scientific, species_id)
+  }
+  # Drop entries with no match in the LUT — they cannot be stored in the DB
+  species_list |> dplyr::filter(!is.na(species_id))
 }
 
 #' @keywords internal
@@ -189,6 +200,7 @@ run_birdnet_inference <- function(audio_files_subset, bnm, birdnet_params, setti
                         analysed_at = res$prediction_time
                         )
     }else{
+      prediction_time <- res$prediction_time
       res <- res$prediction_raw |>
         dplyr::select(-common_name) |>
         dplyr::mutate(
@@ -199,13 +211,17 @@ run_birdnet_inference <- function(audio_files_subset, bnm, birdnet_params, setti
         ) |>
         dplyr::rename(species_scientific = scientific_name) |>
         dplyr::left_join(possible_species_df, by = "species_scientific") |>
+        dplyr::filter(!is.na(species_id)) |>
         dplyr::mutate(
           behavior_id = NA_integer_,
           confidence = as.integer(round(confidence * 10000)),
           error_type = NA_character_
         ) |>
-        dplyr::mutate(analysed_at = res$prediction_time) |>
-        dplyr::select(audio_file_id, settings_id, begin_time_ms, end_time_ms, confidence, species_id, behavior_id, error_type, analysed_at)
+        dplyr::mutate(analysed_at = prediction_time) |>
+        dplyr::select(audio_file_id, settings_id, begin_time_ms, end_time_ms, confidence, species_id, behavior_id, error_type, analysed_at) |>
+        # Deduplicate: keep highest-confidence row per (file, window, species)
+        dplyr::arrange(dplyr::desc(confidence)) |>
+        dplyr::distinct(audio_file_id, settings_id, begin_time_ms, end_time_ms, species_id, .keep_all = TRUE)
     }
 
     inference_list[[i]] <- res
