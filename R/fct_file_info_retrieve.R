@@ -161,12 +161,29 @@ retrieve_local_file_info <- function(project_id,
 
       while (length(audio_files_remaining) > 0 && n_retries < 5) {
         n_retries <- n_retries + 1
+
+        # Pre-filter: drop files that do not resolve (dead symlinks, truly gone).
+        # file.exists() returns FALSE for dead symlinks and missing files.
+        # On a healthy network drive this is a no-op; on a flaky one it only
+        # removes files that are verifiably absent right now — they remain in
+        # audio_files_remaining so subsequent retries can still pick them up if
+        # they reappear (handled by setdiff below).
+        readable <- audio_files_remaining[file.exists(audio_files_remaining)]
+        unreadable_now <- setdiff(audio_files_remaining, readable)
+        if (length(unreadable_now) > 0) {
+          message("  ", length(unreadable_now),
+                  " file(s) not accessible, skipping this attempt: ",
+                  paste(basename(unreadable_now), collapse = ", "))
+        }
+
         message("  EXIF attempt #", n_retries,
-                " (", length(audio_files_remaining), " files remaining)")
+                " (", length(readable), " readable files)")
+
+        if (length(readable) == 0) break
 
         try({
           exif_try <- exiftoolr::exif_read(
-            audio_files_remaining,
+            readable,
             recursive = FALSE,
             tags      = c("SourceFile", "SampleRate", "FileModifyDate",
                           "Duration", "CreateDate", "MediaCreateDate"),
@@ -325,14 +342,18 @@ extract_audio_timestamps <- function(audio_files_table,
 
   if (parse_datetime) {
     default_parse_fun <- function(relative_path) {
+      # Extract the first YYYYMMDD_HHMMSS pattern anywhere in the filename.
+      # This is more robust than splitting on "_" and taking the last two
+      # segments, which breaks when filenames in the same deployment have
+      # different numbers of underscore-delimited segments (e.g. a backup
+      # copy named "DEVICE_BACKUP_20240526_053500.wav" alongside the original
+      # "DEVICE_20240526_053500.wav" — the padded split matrix shifts column
+      # indices and produces wrong or NA timestamps for shorter filenames).
       relative_path |>
         basename() |>
         tools::file_path_sans_ext() |>
-        stringr::str_split(pattern = "_", simplify = TRUE) |>
-        as.data.frame() |>
-        (\(df) df[, (ncol(df) - 1):ncol(df)])() |>
-        (\(df) apply(df, 1, paste, collapse = " "))() |>
-        strptime(format = "%Y%m%d %H%M%S")
+        stringr::str_extract("\\d{8}_\\d{6}") |>
+        strptime(format = "%Y%m%d_%H%M%S")
     }
 
     parse_fun  <- if (!is.null(custom_parse_fun)) custom_parse_fun else default_parse_fun
