@@ -1,6 +1,6 @@
 Package: evalpam
 Title: Evaluate passive acoustic monitoring data
-Version: 0.0.0.9000
+Version: 0.0.0.9001
 Authors@R: c(
     person("Gabriel", "Holz", , "Gabriel.Holz@forst.bwl.de", role = "aut"),
     person("Alexander", "Wagner", , "alexander.wagner@wald-rlp.de", role = c("aut", "cre"))
@@ -36,7 +36,9 @@ Imports:
     shinyWidgets,
     stringi,
     stringr,
+    seewave,
     tidyr,
+    tuneR,
     video
 Suggests: 
     mockery,

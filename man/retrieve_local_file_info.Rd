@@ -12,6 +12,10 @@ retrieve_local_file_info(
   parse_datetime = TRUE,
   custom_parse_fun = NULL,
   force_exif = FALSE,
+  list_files_retries = 3,
+  list_files_verify = TRUE,
+  list_files_min_stable_scans = 2,
+  exif_chunk_size = 500L,
   default_required_annotation_type_id = 3
 )
 }
@@ -40,37 +44,49 @@ POSIXct timestamps. If NULL, uses default parsing (expects format
 \item{force_exif}{Logical. If TRUE, forces re-reading of EXIF data even if
 audio file index already exists. Default is FALSE.}
 
-\item{default_required_annotation_type_id}{Integer. Default annotation type ID
-to assign to all audio files. Default is 3 (which .}
+\item{list_files_retries}{Integer. Maximum retry attempts for each directory
+scan in \code{find_audio_files}. Default is 3.}
+
+\item{list_files_verify}{Logical. If TRUE, performs multiple scans per
+directory and only accepts results when consecutive scans are identical.
+Recommended for network drives. Default is TRUE.}
+
+\item{list_files_min_stable_scans}{Integer. Consecutive identical scans
+required to accept a directory listing. Only used when
+\code{list_files_verify = TRUE}. Default is 2.}
+
+\item{exif_chunk_size}{Integer. Maximum number of files passed to ExifTool in
+a single call. Smaller values reduce the blast radius of transient errors on
+network drives (a failed chunk is retried without re-reading already
+processed files). Default is 500.}
+
+\item{default_required_annotation_type_id}{Integer. Default annotation type
+ID to assign to all audio files. Default is 3.}
 }
 \value{
-List of created audio_file_indices + list of deployment_index. Function is also called for its side effects:
+Named list with:
   \itemize{
-    \item Creates or updates `deployment_index.csv` in project folder
-    \item Creates `<deployment_name>_audio_file_index.csv` for each deployment
+    \item \code{new_audio_file_indices} – paths to newly created .fst index files
+    \item \code{all_audio_file_indices} – paths to all .fst index files found
+    \item \code{deployment_index} – path to deployment_index.csv
   }
+  Side effects: creates \code{<project_folder>/audio_file_indices/<name>_afi.fst}
+  per deployment and \code{<project_folder>/deployment_index.csv}.
 }
 \description{
 Scans a project folder structure to index audio files and extract metadata
-from EXIF data. Creates deployment and audio file index CSV files with
+from EXIF data. Creates deployment and audio file index files (.fst) with
 timestamps, file paths, and technical specifications.
 }
 \details{
-The function performs the following steps:
-\enumerate{
-  \item Traverses the folder structure to the specified depth to identify deployments
-  \item Creates deployment names by concatenating folder path components
-  \item For each deployment, extracts EXIF metadata from audio files (or reads
-    from existing index if available)
-  \item Parses or extracts timestamps from files
-  \item Calculates start and end datetimes for each deployment
-  \item Creates/updates deployment index with metadata placeholders
-}
+File discovery uses \code{\link{find_audio_files}} which scans each directory
+with retry and optional verification scanning to handle network micro-disconnects.
+EXIF reading retries up to 5 times for any files not returned in a previous attempt.
 
-Timestamp extraction follows this priority (when `parse_datetime = FALSE`):
+Timestamp extraction priority when \code{parse_datetime = FALSE}:
 \enumerate{
-  \item MediaCreateDate (from EXIF)
-  \item CreateDate (from EXIF)
-  \item FileModifyDate (from EXIF)
+  \item MediaCreateDate
+  \item CreateDate
+  \item FileModifyDate
 }
 }

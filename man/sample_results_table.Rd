@@ -62,5 +62,4 @@ prepare_spectrogram_input_data(
 )
 }
 
-
 }

@@ -12,37 +12,22 @@ extract_audio_timestamps(
 )
 }
 \arguments{
-\item{audio_files_table}{Data frame containing audio file metadata with
-columns including `relative_path` and optionally EXIF timestamp columns
-(`MediaCreateDate`, `CreateDate`, `FileModifyDate`).}
+\item{audio_files_table}{Data frame with columns `relative_path` and
+optionally `MediaCreateDate`, `CreateDate`, `FileModifyDate`.}
 
-\item{parse_datetime}{Logical. If TRUE, parses timestamps from filenames.
-If FALSE, uses EXIF metadata timestamps. Default is TRUE.}
+\item{parse_datetime}{Logical. If TRUE, parses timestamps from filenames.}
 
-\item{custom_parse_fun}{Function or NULL. Custom function to parse timestamps
-from relative file paths. Should take a character vector of paths and return
-POSIXct timestamps. If NULL, uses default parsing. Default is NULL.}
+\item{custom_parse_fun}{Function or NULL. Custom filename parser returning
+POSIXct. If NULL, uses default parsing for format `*_YYYYMMDD_HHMMSS.*`.}
 
-\item{force_tz}{Character or NULL. Timezone to force for timestamp data
-(e.g., "UTC", "America/New_York"). If NULL, no timezone conversion is applied.}
+\item{force_tz}{Character or NULL. Timezone to apply via
+\code{lubridate::force_tz}.}
 }
 \value{
-Data frame with added `timestamp_start` column containing parsed
-  or extracted timestamps.
+Data frame with `timestamp_start` column added.
 }
 \description{
 Extracts timestamps either by parsing filenames or reading EXIF metadata,
 with optional timezone conversion.
-}
-\details{
-Default filename parsing expects format: `*_YYYYMMDD_HHMMSS.*`
-(extracts last two underscore-separated components before file extension).
-
-EXIF timestamp priority (when `parse_datetime = FALSE`):
-\enumerate{
-  \item MediaCreateDate
-  \item CreateDate
-  \item FileModifyDate
-}
 }
 \keyword{internal}
