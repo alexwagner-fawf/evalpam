@@ -2,8 +2,11 @@ library(evalpam)
 
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 # Adjust all values in this block before running.
+CONDA_ENV_NAME <- NULL  # e.g. "birdnet-r" — NULL uses birdnetR's managed env
+                        # Set to a conda env name when the managed env fails
+                        # (wrong Python version, missing birdnet package, etc.)
+                        # Create the env first with: setup_birdnet_conda()
 
-PYTHON_PATH    <- "C:/Users/awagner/.conda/envs/pam_py310/python.exe"
 N_WORKERS      <- 4L   # number of parallel future workers
 
 project_id               <- 1
@@ -16,7 +19,7 @@ upload_inference         <- TRUE  # set FALSE to do a dry run without touching t
 # Windows: redirect temp I/O to a fast local disk (comment out on Linux/Mac)
 # Sys.setenv(TMPDIR = "C:/temp", TMP = "C:/temp", TEMP = "C:/temp")
 
-Sys.setenv("https_proxy" = "http://proxy.rlp:8080")
+#Sys.setenv("https_proxy" = "http://proxy.rlp:8080")
 # ─────────────────────────────────────────────────────────────────────────────
 
 library(future)
@@ -26,6 +29,61 @@ options(future.workdir = normalizePath(getwd(), winslash = "/", mustWork = TRUE)
 if (!spatial_filtering) {
   occurence_min_confidence <- 0
   temporal_filtering <- FALSE
+}
+
+# ── Python environment selection ──────────────────────────────────────────────
+# Priority: (1) birdnetR managed venv, (2) conda env named by CONDA_ENV_NAME.
+# The managed venv is tried first so that conda is only used when truly needed.
+# If CONDA_ENV_NAME is set it skips the managed-env check entirely.
+#
+# To diagnose managed env problems interactively:
+#   check_birdnet_managed_env()            # test + diagnose
+#   check_birdnet_managed_env(force_reinstall = TRUE)  # wipe + rebuild
+# To create a conda fallback env:
+#   setup_birdnet_conda()                  # creates env "birdnet-r"
+
+if (is.null(CONDA_ENV_NAME)) {
+  # Try birdnetR's managed virtual environment first.
+  managed_ok <- tryCatch({
+    Sys.setenv(RETICULATE_PYTHON = "managed")
+    reticulate::py_require(
+      packages       = c("numpy>=1.23.5,<2.0.0", "birdnet==0.1.7"),
+      python_version = ">=3.9,<3.12",
+      action         = "add"
+    )
+    reticulate::py_config()  # force initialisation — surfaces version errors now
+    TRUE
+  }, error = function(e) {
+    message("birdnetR managed env unavailable: ", conditionMessage(e))
+    FALSE
+  })
+
+  if (!managed_ok) {
+    stop(
+      "The birdnetR managed virtual env could not be initialised and ",
+      "CONDA_ENV_NAME is not set.\n",
+      "Options:\n",
+      "  1. Diagnose with: check_birdnet_managed_env()\n",
+      "  2. Create a conda fallback and set CONDA_ENV_NAME:\n",
+      "       setup_birdnet_conda()  # creates env 'birdnet-r'\n",
+      "       CONDA_ENV_NAME <- \"birdnet-r\"  # then re-run"
+    )
+  }
+
+  message("Using birdnetR managed virtual environment.")
+  conda_env_python <- NULL
+
+} else {
+  # Resolve conda Python path — fail fast if the env does not exist.
+  conda_env_python <- tryCatch(
+    reticulate::conda_python(envname = CONDA_ENV_NAME),
+    error = function(e) {
+      stop("Could not find conda env '", CONDA_ENV_NAME, "'. ",
+           "Run setup_birdnet_conda(\"", CONDA_ENV_NAME, "\") first.\n  ",
+           e$message)
+    }
+  )
+  message("Using conda env '", CONDA_ENV_NAME, "': ", conda_env_python)
 }
 
 pool <- set_db_pool()
@@ -42,6 +100,25 @@ audio_files <- dplyr::tbl(pool, DBI::Id("import", "audio_files")) |>
   dplyr::collect()
 
 species <- DBI::dbReadTable(pool, DBI::Id("lut_species_code"))
+
+# ── Dev-mode coordinate check ─────────────────────────────────────────────────
+# Coordinates are required for spatial/temporal species filtering.  In dev mode
+# deployments may have empty geometry (no real recorder locations set up yet).
+# Auto-disable spatial filtering so the script can run end-to-end for testing.
+is_dev     <- tryCatch(golem::app_dev(), error = function(e) FALSE)
+pkg_dev_path <- if (is_dev) tryCatch(golem::pkg_path(), error = function(e) NULL) else NULL
+if (!is.null(pkg_dev_path))
+  message("Dev mode: workers will load evalpam source from ", pkg_dev_path)
+
+if (is_dev && any(sf::st_is_empty(deployments))) {
+  message(
+    "Dev mode: ", sum(sf::st_is_empty(deployments)),
+    " deployment(s) have no geometry — spatial_filtering and temporal_filtering disabled."
+  )
+  spatial_filtering  <- FALSE
+  temporal_filtering <- FALSE
+  occurence_min_confidence <- 0
+}
 
 # Build full paths to audio files
 audio_files <- audio_files |>
@@ -97,21 +174,56 @@ if (length(remaining_deployments) == 0) {
                                         occurence_min_confidence,
                                         species,
                                         birdnet_params_list,
-                                        python_path,
-                                        temp_results_folder) {
+                                        conda_env_python,
+                                        temp_results_folder,
+                                        pkg_dev_path) {
 
+    # Thread-count pins apply in both managed and conda paths.
     Sys.setenv(
-      RETICULATE_PYTHON    = python_path,
       OMP_NUM_THREADS      = 1,
       MKL_NUM_THREADS      = 1,
       OPENBLAS_NUM_THREADS = 1,
       TF_CPP_MIN_LOG_LEVEL = 2   # suppress TF info logs
     )
 
+    # ── Python / reticulate setup ──────────────────────────────────────────
+    # Both branches call py_config() before library(evalpam) so that Python is
+    # fully initialised before any birdnetR:: namespace call can trigger
+    # birdnetR's .onLoad (which would otherwise race to set RETICULATE_PYTHON).
+    #
+    # Managed env path (conda_env_python is NULL):
+    #   Replicate birdnetR's .onLoad explicitly.  Errors surface here as clear
+    #   worker failures rather than opaque "birdnetR failed to load" messages.
+    #
+    # Conda path (conda_env_python is a file path):
+    #   Bind Python before birdnetR loads so .onLoad's
+    #   Sys.setenv(RETICULATE_PYTHON="managed") is a no-op.
     library(reticulate)
-    use_python(python_path, required = TRUE)
-    py_require(c("numpy>=1.23.5", "birdnet==0.1.7"), action = "add")
-    library(evalpam)
+
+    if (!is.null(conda_env_python)) {
+      Sys.setenv(RETICULATE_PYTHON = conda_env_python)
+      reticulate::use_python(conda_env_python, required = TRUE)
+      reticulate::py_config()
+      library(birdnetR)  # .onLoad fires; Python already bound — no-op
+    } else {
+      Sys.setenv(RETICULATE_PYTHON = "managed")
+      reticulate::py_require(
+        packages       = c("numpy>=1.23.5,<2.0.0", "birdnet==0.1.7"),
+        python_version = ">=3.9,<3.12",
+        action         = "add"
+      )
+      reticulate::py_config()
+      # birdnetR will load lazily on first birdnetR:: call; Python already bound
+    }
+
+    # In dev mode load from source so workers see the same function signatures
+    # as the main session (avoids "unused argument" errors when the installed
+    # package is older than the source tree).
+    if (!is.null(pkg_dev_path)) {
+      pkgload::load_all(pkg_dev_path, quiet = TRUE)
+    } else {
+      library(evalpam)
+    }
     library(sf)
     library(dplyr)
 
@@ -140,16 +252,17 @@ if (length(remaining_deployments) == 0) {
         # endlessly. settings_id = NA signals a worker-level failure to the
         # aggregation step (these rows are excluded from DB upload).
         af_ids <- audio_files$audio_file_id[audio_files$deployment_id == deployment_id]
+        n      <- length(af_ids)
         data.frame(
           audio_file_id = af_ids,
-          settings_id   = NA_integer_,
-          begin_time_ms = NA_integer_,
-          end_time_ms   = NA_integer_,
-          confidence    = NA_integer_,
-          species_id    = NA_integer_,
-          behavior_id   = NA_integer_,
-          error_type    = "failed_worker_error",
-          analysed_at   = Sys.time()
+          settings_id   = rep(NA_integer_,   n),
+          begin_time_ms = rep(NA_integer_,   n),
+          end_time_ms   = rep(NA_integer_,   n),
+          confidence    = rep(NA_integer_,   n),
+          species_id    = rep(NA_integer_,   n),
+          behavior_id   = rep(NA_integer_,   n),
+          error_type    = rep("failed_worker_error", n),
+          analysed_at   = rep(Sys.time(),    n)
         )
       }
     )
@@ -187,8 +300,9 @@ if (length(remaining_deployments) == 0) {
       temporal_filtering       = temporal_filtering,
       occurence_min_confidence = occurence_min_confidence,
       birdnet_params_list      = birdnet_params_list,
-      python_path              = PYTHON_PATH,
-      temp_results_folder      = temp_results_folder
+      conda_env_python         = conda_env_python,
+      temp_results_folder      = temp_results_folder,
+      pkg_dev_path             = pkg_dev_path
     ),
     SIMPLIFY    = FALSE,
     future.seed = TRUE
@@ -320,3 +434,8 @@ if (nrow(birdnet_inference_new) == 0) {
 # upsert_results_df() on each. The DB enforces uniqueness on
 # (audio_file_id, settings_id, begin_time_ms, end_time_ms, species_id),
 # so re-uploading is safe.
+#
+# Conda fallback usage:
+#   1. Run setup_birdnet_conda() once to create the env (Python 3.11 + birdnet==0.1.7)
+#   2. Set CONDA_ENV_NAME <- "birdnet-r" in the config block above
+#   3. Re-run this script; workers will use the conda env instead of the managed venv
