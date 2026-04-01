@@ -1,6 +1,10 @@
--- Migration: add binary blob columns to import.spectrograms
--- Run once on existing databases; safe to re-run (IF NOT EXISTS).
+-- Migration: add/remove blob columns on import.spectrograms
+-- Safe to re-run (IF NOT EXISTS / IF EXISTS guards).
 
 ALTER TABLE import.spectrograms
-  ADD COLUMN IF NOT EXISTS audio_data BYTEA,
-  ADD COLUMN IF NOT EXISTS image_data BYTEA;
+  ADD COLUMN IF NOT EXISTS audio_data BYTEA;
+
+-- image_data is no longer used; the browser renders spectrograms via
+-- wavesurfer.js directly from the audio clip.
+ALTER TABLE import.spectrograms
+  DROP COLUMN IF EXISTS image_data;

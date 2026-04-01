@@ -110,7 +110,6 @@ CREATE TABLE IF NOT EXISTS import.spectrograms (
     freq_max integer NOT NULL,
     required_annotation_type_id integer REFERENCES public.lut_annotation_type_code(annotation_type_id),
     audio_data BYTEA,
-    image_data BYTEA,
     created_at timestamptz DEFAULT NOW(),
     CONSTRAINT spectrograms_audio_file_id_fkey FOREIGN KEY (audio_file_id) REFERENCES import.audio_files (audio_file_id) ON DELETE CASCADE,
     CONSTRAINT spectrograms_result_id_fkey FOREIGN KEY (result_id) REFERENCES import.results (result_id) ON DELETE SET NULL,

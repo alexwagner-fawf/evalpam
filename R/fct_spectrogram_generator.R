@@ -192,20 +192,17 @@ build_spectrogram_db <- function(data, pool, padding_s = 5, analysis_range = 3,
 #' @param output_dir Character. Directory where the .mp3 files will be saved.
 #' @param verbose Logical. Whether to show a progress bar.
 #'
-#' @param export_to_db Logical. If \code{TRUE}, write the MP3 (and PNG if
-#'   \code{generate_image = TRUE}) as BYTEA blobs to \code{import.spectrograms}.
+#' @param export_to_db Logical. If \code{TRUE}, write the MP3 as a BYTEA blob
+#'   to \code{import.spectrograms.audio_data}.
 #'   The local file is still written to \code{output_dir} as a cache.
-#' @param generate_image Logical. If \code{TRUE}, generate a PNG spectrogram
-#'   image (middle frame of a short spectrogram video) and, when
-#'   \code{export_to_db = TRUE}, store it in \code{import.spectrograms.image_data}.
 #' @return A list with processing status and errors.
 #' @importFrom DBI dbGetQuery dbExecute
 #' @importFrom pool poolWithTransaction
-#' @importFrom av av_audio_convert av_spectrogram_video av_video_images
+#' @importFrom av av_audio_convert
 #' @export
 build_audio_clips_db <- function(data, pool, padding_s = 5, analysis_range = 3,
                                  output_dir = "spectrograms", verbose = TRUE,
-                                 export_to_db = FALSE, generate_image = FALSE) {
+                                 export_to_db = FALSE) {
 
   if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
   if (verbose) pb <- utils::txtProgressBar(min = 0, max = nrow(data), style = 3)
@@ -266,33 +263,12 @@ build_audio_clips_db <- function(data, pool, padding_s = 5, analysis_range = 3,
           verbose = FALSE
         )
 
-        # 5. Optional: PNG spectrogram image (middle frame of a short video)
-        raw_image <- NULL
-        if (generate_image) {
-          tmp_video <- tempfile(fileext = ".mp4")
-          tmp_frames <- tempfile()
-          dir.create(tmp_frames)
-          tryCatch({
-            av::av_spectrogram_video(out_file, output = tmp_video, verbose = FALSE)
-            frames <- av::av_video_images(tmp_video, destdir = tmp_frames, format = "png")
-            if (length(frames) > 0) {
-              mid_frame <- frames[ceiling(length(frames) / 2)]
-              raw_image <- readBin(mid_frame, "raw", file.info(mid_frame)$size)
-            }
-          }, error = function(e) {
-            warning("Image generation failed for spec_id ", spec_id, ": ", e$message)
-          }, finally = {
-            unlink(tmp_video)
-            unlink(tmp_frames, recursive = TRUE)
-          })
-        }
-
-        # 6. Optional: upload blobs to DB
+        # 5. Optional: upload audio blob to DB
         if (export_to_db) {
           raw_audio <- readBin(out_file, "raw", file.info(out_file)$size)
           DBI::dbExecute(conn,
-            "UPDATE import.spectrograms SET audio_data = $1, image_data = $2 WHERE spectrogram_id = $3",
-            params = list(list(raw_audio), list(raw_image), spec_id)
+            "UPDATE import.spectrograms SET audio_data = $1 WHERE spectrogram_id = $2",
+            params = list(list(raw_audio), spec_id)
           )
         }
       })
