@@ -25,8 +25,11 @@ run_app <- function(
 
   with_golem_options(
     app = shinyApp(
-      # UI mit Login-Schutz
-      ui = shinymanager::secure_app(app_ui()),
+      # UI mit Login-Schutz und custom CSS
+      ui = shinymanager::secure_app(
+        app_ui(),
+        head_auth = tags$head(tags$link(rel = "stylesheet", type = "text/css", href = "www/custom.css"))
+      ),
       server = function(input, output, session) {
 
         app_server(input, output, session, pool = pool)

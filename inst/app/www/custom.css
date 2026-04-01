@@ -1,0 +1,77 @@
+/* Custom CSS for evalpam shinymanager login page */
+
+/* Full-screen auth overlay — this is the actual background element */
+.panel-auth {
+    background-color: #1a1a2e !important;
+    background-image: url('background_landing_page.png') !important;
+    background-size: cover;
+    background-position: center center;
+    background-repeat: no-repeat;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+/* Login card (Bootstrap .panel.panel-primary) */
+.panel-auth .panel.panel-primary {
+    background: rgba(255, 255, 255, 0.93);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+    border: none;
+    overflow: hidden;
+}
+
+/* Hide the default blue Bootstrap panel-heading bar */
+.panel-auth .panel-primary > .panel-heading {
+    display: none;
+}
+
+/* Form body padding */
+.panel-auth .panel-body {
+    padding: 30px 30px 24px;
+}
+
+/* "Please authenticate" heading */
+.panel-auth h3 {
+    color: #4285f4;
+    font-size: 22px;
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+/* Input fields */
+.panel-auth .form-control {
+    border-radius: 4px;
+    border: 1px solid #ddd;
+    padding: 10px 12px;
+    font-size: 15px;
+    transition: border-color 0.3s;
+}
+
+.panel-auth .form-control:focus {
+    border-color: #4285f4;
+    box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.18);
+    outline: none;
+}
+
+/* Login button */
+.panel-auth .btn-primary {
+    background-color: #4285f4;
+    border-color: #3367cc;
+    padding: 10px;
+    font-size: 15px;
+    border-radius: 4px;
+    transition: background-color 0.3s;
+}
+
+.panel-auth .btn-primary:hover,
+.panel-auth .btn-primary:focus {
+    background-color: #3367cc;
+    border-color: #2a56c6;
+}
+
+/* Labels */
+.panel-auth label {
+    font-weight: 600;
+    color: #333;
+    font-size: 14px;
+}
