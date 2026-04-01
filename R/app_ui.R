@@ -9,6 +9,7 @@ app_ui <- function(request) {
     golem_add_external_resources(),
     fluidPage(
       shinyjs::useShinyjs(),
+      div(class = "login-background"),
       titlePanel("Vogelstimmen-Verifikation"),
 
       sidebarLayout(
@@ -30,11 +31,23 @@ app_ui <- function(request) {
                            choices = c("Deutsch" = "de", "English" = "en", "Scientific" = "sci"),
                            selected = "de"
                          ),
+                         tags$hr(),
+                         tags$p(tags$small("Spektrogramm-Frequenzbereich / Spectrogram frequency range:")),
+                         numericInput(
+                           "freq_max_display",
+                           "Max. Frequenz / Max. frequency (Hz):",
+                           value = 10000, min = 500, max = 22000, step = 500
+                         ),
+                         numericInput(
+                           "freq_min_display",
+                           "Min. Frequenz / Min. frequency (Hz):",
+                           value = 0, min = 0, max = 10000, step = 100
+                         ),
                          circle = TRUE,
                          status = "default",
                          icon = icon("gear"),
-                         width = "300px",
-                         tooltip = shinyWidgets::tooltipOptions(title = "Sprache ändern")
+                         width = "320px",
+                         tooltip = shinyWidgets::tooltipOptions(title = "Einstellungen")
                        )
                    )
             )
@@ -125,17 +138,14 @@ app_ui <- function(request) {
               tags$span(id = "ws-total-time", style = "color: #aaa; font-family: monospace; font-size: 14px;", "0:00.0")
           ),
 
-          # Waveform
+          # Waveform + Spectrogram (SpectrogramPlugin renders inside wavesurfer's
+          # own wrapper, so both live in #waveform)
           div(id = "waveform",
               style = "background: #1a1a2e; border-radius: 4px 4px 0 0; padding: 4px;"),
 
           # Timeline
           div(id = "timeline",
-              style = "background: #1a1a2e; padding: 0 4px;"),
-
-          # Spektrogramm
-          div(id = "spectrogram",
-              style = "background: #1a1a2e; border-radius: 0 0 4px 4px;"),
+              style = "background: #1a1a2e; border-radius: 0 0 4px 4px; padding: 0 4px;"),
 
           # Legende
           div(style = "font-size: 12px; color: #888; margin-top: 6px;",
@@ -194,11 +204,15 @@ golem_add_external_resources <- function() {
   #   )
   # )
 
+  # Inline the JS so it is always fresh — no caching, no resource-path
+  # resolution issues with load_all() / app_sys().
+  js_content <- paste(readLines(app_sys("app/js/wavesurfer_init.js")), collapse = "\n")
+
   tagList(
     tags$head(
-      favicon(),
+      favicon(ico = "favicon_512px", ext = "png"),
       bundle_resources(path = app_sys("app/www"), app_title = "evalpam"),
-      tags$script(type = "module", src = "www/wavesurfer_init.js")
+      tags$script(HTML(js_content))
     )
   )
 }

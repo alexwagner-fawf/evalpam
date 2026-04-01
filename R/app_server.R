@@ -261,51 +261,121 @@ app_server <- function(input, output, session, pool) {
       dplyr::arrange(desc(score))
   })
 
-  # Wavesurfer Player Logic
-  observeEvent(input$seq, {
+  # Wavesurfer Player Logic — reacts to file change OR freq range change
+  observeEvent(list(input$seq, input$freq_max_display, input$freq_min_display), {
     req(input$seq, project_data())
     row_data <- project_data() |> dplyr::filter(path == input$seq)
 
     if (nrow(row_data) > 0) {
       buffer_val      <- row_data$buffer_ms[1]
       seek_target     <- max(0, buffer_val - 2)
-      analysis_range  <- 3L  # BirdNET detection window in seconds
+      analysis_range  <- 3L
 
-      sr       <- row_data$sample_rate[1]
-      max_freq <- if (is.na(sr)) 15000L else as.integer(sr / 2L)
+      sr          <- row_data$sample_rate[1]
+      nyquist_cap <- if (is.na(sr)) 22050L else as.integer(sr / 2L)
 
-      # Resolve local spectrogram folder (mirrors golem_add_external_resources logic)
-      spec_path <- Sys.getenv("spectrogram_folder")
+      user_freq_max <- if (!is.null(input$freq_max_display) && !is.na(input$freq_max_display))
+        as.integer(input$freq_max_display) else nyquist_cap
+      user_freq_min <- if (!is.null(input$freq_min_display) && !is.na(input$freq_min_display))
+        as.integer(input$freq_min_display) else 0L
+
+      eff_freq_max <- min(nyquist_cap, user_freq_max)
+      eff_freq_min <- max(0L, user_freq_min)
+
+      spec_path  <- Sys.getenv("spectrogram_folder")
       if (spec_path == "") spec_path <- "spectrograms"
-
       local_file <- file.path(spec_path, input$seq)
 
-      # DB fallback: if the MP3 is not on disk, fetch from database blob and cache it
       if (!file.exists(local_file)) {
-        spec_id <- tools::file_path_sans_ext(input$seq)
+        spec_id  <- tools::file_path_sans_ext(input$seq)
         blob_row <- tryCatch(
-          DBI::dbGetQuery(
-            pool,
+          DBI::dbGetQuery(pool,
             "SELECT audio_data FROM import.spectrograms WHERE spectrogram_id = $1",
-            params = list(as.integer(spec_id))
-          ),
+            params = list(as.integer(spec_id))),
           error = function(e) NULL
         )
-
         if (!is.null(blob_row) && nrow(blob_row) > 0 && !is.null(blob_row$audio_data[[1]])) {
           dir.create(spec_path, showWarnings = FALSE, recursive = TRUE)
           writeBin(blob_row$audio_data[[1]], local_file)
         }
       }
 
+      # Freq settings control the spectrogram display only (SpectrogramPlugin
+      # frequencyMin/Max). The main audio playback always uses the original clip
+      # so that the display acts as a zoom/crop, not a content change.
+      # Frequency-filtered audio is only produced for the selection tool
+      # (spec_selection observer below).
+      audio_url <- paste0("spectrograms/", input$seq)
+
       session$sendCustomMessage("ws_load", list(
-        url             = paste0("spectrograms/", input$seq),
+        url             = audio_url,
         seek            = seek_target,
         detection_start = buffer_val,
         detection_end   = buffer_val + analysis_range,
-        freq_max        = max_freq
+        freq_max        = eff_freq_max,
+        freq_min        = eff_freq_min,
+        sample_rate     = if (is.na(sr)) 44100L else as.integer(sr)
       ))
     }
+  })
+
+  # ── Spectrogram region selection → filtered audio playback ──────────────────
+  # Receives {spec_id, t_start, t_end, f_min, f_max} from the canvas overlay in
+  # wavesurfer_init.js, applies a time-trim + bandpass filter, and sends the
+  # result back as a base64 data-URL for immediate playback in the browser.
+  observeEvent(input$spec_selection, {
+    sel <- input$spec_selection
+    req(sel$spec_id, !is.null(sel$t_start), !is.null(sel$t_end))
+
+    spec_path  <- Sys.getenv("spectrogram_folder")
+    if (spec_path == "") spec_path <- "spectrograms"
+    local_file <- file.path(spec_path, paste0(sel$spec_id, ".mp3"))
+
+    # DB fallback (same logic as ws_load observer)
+    if (!file.exists(local_file)) {
+      blob_row <- tryCatch(
+        DBI::dbGetQuery(pool,
+          "SELECT audio_data FROM import.spectrograms WHERE spectrogram_id = $1",
+          params = list(as.integer(sel$spec_id))),
+        error = function(e) NULL
+      )
+      if (!is.null(blob_row) && nrow(blob_row) > 0 && !is.null(blob_row$audio_data[[1]])) {
+        dir.create(spec_path, showWarnings = FALSE, recursive = TRUE)
+        writeBin(blob_row$audio_data[[1]], local_file)
+      } else return()
+    }
+
+    filtered_b64 <- tryCatch({
+      wave <- tuneR::readMP3(local_file)
+      sr   <- wave@samp.rate
+
+      # Time trim
+      t_start <- max(0,    as.numeric(sel$t_start))
+      t_end   <- min(length(wave@left) / sr, as.numeric(sel$t_end))
+      if (t_end > t_start)
+        wave <- seewave::cutw(wave, from = t_start, to = t_end, output = "Wave")
+
+      # Bandpass filter (only when a meaningful frequency band is selected)
+      f_min <- as.numeric(sel$f_min)
+      f_max <- as.numeric(sel$f_max)
+      nyq   <- sr / 2
+      if (f_max > f_min && f_max <= nyq)
+        wave <- seewave::ffilter(wave, from = f_min, to = f_max, output = "Wave")
+
+      # WAV → MP3 → base64 data-URL
+      tmp_wav <- tempfile(fileext = ".wav")
+      tmp_mp3 <- tempfile(fileext = ".mp3")
+      on.exit({ unlink(tmp_wav); unlink(tmp_mp3) }, add = TRUE)
+      tuneR::writeWave(wave, tmp_wav)
+      av::av_audio_convert(tmp_wav, tmp_mp3, verbose = FALSE)
+      paste0("data:audio/mpeg;base64,", base64enc::base64encode(tmp_mp3))
+    }, error = function(e) {
+      warning("spec_selection filter failed: ", e$message)
+      NULL
+    })
+
+    if (!is.null(filtered_b64))
+      session$sendCustomMessage("ws_play_selection", list(dataUrl = filtered_b64))
   })
 
   #C: "Smart Species Selection"
