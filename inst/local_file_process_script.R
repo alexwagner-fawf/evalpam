@@ -1,7 +1,7 @@
 
 
 ###### define processing params
-project_id = 2
+project_id = 1
 occurence_min_confidence = 0.03 #e bird occurence confidence threshold for species filtering
 spatial_filtering = TRUE #will filter species list spatially (e bird occurence data) - if FALSE, occurence min confidence will be set to 0
 temporal_filtering = TRUE # will group audio_files by week (1 - 50) to generate time specific species list (will be reset to FALSE if spatial_filtering is FALSE)
@@ -45,6 +45,7 @@ audio_files$full_path[1] <- paste0(audio_files$full_path[1], ".123")
 results_list <- lapply(as.list(deployments$deployment_id),
        process_deployment_birdnet,
        deployments = deployments,
+       species = species,
        audio_files = audio_files,
        temporal_filtering = temporal_filtering,
        occurence_min_confidence = occurence_min_confidence,

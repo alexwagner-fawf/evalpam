@@ -149,6 +149,7 @@ setup_db <- function(user, host, port, evalpam_dbname, password, pool, config, d
       statement <- glue::glue_sql(statement,
                                   DB_PASSWORD_EVALPAM_USER = rawToChar(base64enc::base64decode(Sys.getenv("evalpam_pw"))),
                                   DB_EVALPAM_USER = config$default$pg_user,
+                                  DB_NAME = config$default$pg_dbname,
                                   .con = pool)
 
       tryCatch({

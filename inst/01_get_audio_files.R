@@ -3,8 +3,8 @@ library(evalpam)
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 # Adjust all values in this block before running.
 
-project_folder  <- "M:/FB_3/Sound_Datenbank/Klimawald2100/"
-folder_depth    <- 3L    # directory levels below project_folder to scan for deployments
+project_folder  <- "~/Dokumente/sound_db/project_1/"
+folder_depth    <- 1L    # directory levels below project_folder to scan for deployments
 
 # ExifTool path (Windows only). Set to NULL to use system PATH (Linux/Mac).
 exiftool_exe <- "C:/Users/awagner/Documents/evalpam/exiftool.exe"
@@ -92,7 +92,9 @@ out <- retrieve_local_file_info(
 deployment_ids <- out$deployment_index |>
   readr::read_csv()
 
-deployments <- deployment_ids |>
+deployments <- deployment_ids
+
+deployments <- deployments |>
   dplyr::mutate(
     standortID = apply(
       stringr::str_split(deployment_name, "_", simplify = TRUE)[, 1:3],
@@ -104,6 +106,10 @@ deployments <- deployment_ids |>
   dplyr::left_join(pam_locs) |>
   dplyr::mutate(valid = TRUE) |>
   dplyr::filter(!is.na(geometry_y_4326))
+# deployments$geometry_x_4326 <- runif(nrow(deployment_ids), 5,6)
+# deployments$geometry_y_4326 <- runif(nrow(deployment_ids), 43,44)
+# deployments$valid <- TRUE
+# deployments$project_id <- 1
 
 if (nrow(deployments) == 0) {
   stop("No deployments with valid coordinates after joining pam_locs. ",
@@ -237,7 +243,8 @@ if (length(problematic_deployment_ids) > 0) {
   }
 }
 
-df_filtered_cleaned_final <- dplyr::select(df_filtered_cleaned, -dupls, -path_length)
+df_filtered_cleaned_final <- dplyr::select(df_filtered_cleaned, -dupls, -path_length) |>
+  dplyr::filter(!is.na(timestamp_start))
 
 # ── Upload audio file records ─────────────────────────────────────────────────
 

@@ -1,4 +1,4 @@
-CREATE DATABASE evalpam_db
+CREATE DATABASE {`DB_NAME`}
   WITH ENCODING='UTF8'
        TEMPLATE=template0;
-ALTER DATABASE evalpam_db SET timezone TO 'UTC';
+ALTER DATABASE {`DB_NAME`} SET timezone TO 'UTC';
