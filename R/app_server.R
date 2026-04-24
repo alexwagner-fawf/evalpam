@@ -261,63 +261,79 @@ app_server <- function(input, output, session, pool) {
       dplyr::arrange(desc(score))
   })
 
-  # Wavesurfer Player Logic — reacts to file change OR freq range change
-  observeEvent(list(input$seq, input$freq_max_display, input$freq_min_display), {
-    req(input$seq, project_data())
-    row_data <- project_data() |> dplyr::filter(path == input$seq)
+  # Debounce frequency inputs: numericInput fires on every keystroke, so without
+  # debouncing each intermediate digit triggers a full WaveSurfer destroy/recreate.
+  # 600 ms gives the user time to finish typing before the reload fires.
+  # input$seq is NOT debounced — file changes must respond immediately.
+  freq_max_d <- debounce(reactive(input$freq_max_display), 600)
+  freq_min_d <- debounce(reactive(input$freq_min_display), 600)
 
-    if (nrow(row_data) > 0) {
-      buffer_val      <- row_data$buffer_ms[1]
-      seek_target     <- max(0, buffer_val - 2)
-      analysis_range  <- 3L
+  # ── WaveSurfer load helper ────────────────────────────────────────────────────
+  # Extracted so the two observers below (seq change vs. freq change) can share
+  # the same logic without duplication.
+  do_ws_load <- function(seq_val, fmax, fmin) {
+    row_data <- project_data() |> dplyr::filter(path == seq_val)
+    if (nrow(row_data) == 0) return(invisible(NULL))
 
-      sr          <- row_data$sample_rate[1]
-      nyquist_cap <- if (is.na(sr)) 22050L else as.integer(sr / 2L)
+    buffer_val     <- row_data$buffer_ms[1]
+    seek_target    <- max(0, buffer_val - 2)
+    analysis_range <- 3L
+    sr             <- row_data$sample_rate[1]
 
-      user_freq_max <- if (!is.null(input$freq_max_display) && !is.na(input$freq_max_display))
-        as.integer(input$freq_max_display) else nyquist_cap
-      user_freq_min <- if (!is.null(input$freq_min_display) && !is.na(input$freq_min_display))
-        as.integer(input$freq_min_display) else 0L
+    # af.sample_rate may reflect BirdNET's analysis rate (e.g. 8000 Hz)
+    # rather than the recording's actual sample rate (typically 48000 Hz).
+    # WaveSurfer clamps frequencyMax against the decoded audio's nyquist
+    # internally, so we only need a generous upper bound here.
+    nyquist_cap   <- 24000L
+    user_freq_max <- if (!is.null(fmax) && !is.na(fmax)) as.integer(fmax) else nyquist_cap
+    user_freq_min <- if (!is.null(fmin) && !is.na(fmin)) as.integer(fmin) else 0L
+    eff_freq_max  <- min(nyquist_cap, user_freq_max)
+    eff_freq_min  <- max(0L, user_freq_min)
 
-      eff_freq_max <- min(nyquist_cap, user_freq_max)
-      eff_freq_min <- max(0L, user_freq_min)
+    spec_path  <- Sys.getenv("spectrogram_folder")
+    if (spec_path == "") spec_path <- "spectrograms"
+    local_file <- file.path(spec_path, seq_val)
 
-      spec_path  <- Sys.getenv("spectrogram_folder")
-      if (spec_path == "") spec_path <- "spectrograms"
-      local_file <- file.path(spec_path, input$seq)
-
-      if (!file.exists(local_file)) {
-        spec_id  <- tools::file_path_sans_ext(input$seq)
-        blob_row <- tryCatch(
-          DBI::dbGetQuery(pool,
-            "SELECT audio_data FROM import.spectrograms WHERE spectrogram_id = $1",
-            params = list(as.integer(spec_id))),
-          error = function(e) NULL
-        )
-        if (!is.null(blob_row) && nrow(blob_row) > 0 && !is.null(blob_row$audio_data[[1]])) {
-          dir.create(spec_path, showWarnings = FALSE, recursive = TRUE)
-          writeBin(blob_row$audio_data[[1]], local_file)
-        }
+    if (!file.exists(local_file)) {
+      spec_id  <- tools::file_path_sans_ext(seq_val)
+      blob_row <- tryCatch(
+        DBI::dbGetQuery(pool,
+          "SELECT audio_data FROM import.spectrograms WHERE spectrogram_id = $1",
+          params = list(as.integer(spec_id))),
+        error = function(e) NULL
+      )
+      if (!is.null(blob_row) && nrow(blob_row) > 0 && !is.null(blob_row$audio_data[[1]])) {
+        dir.create(spec_path, showWarnings = FALSE, recursive = TRUE)
+        writeBin(blob_row$audio_data[[1]], local_file)
       }
-
-      # Freq settings control the spectrogram display only (SpectrogramPlugin
-      # frequencyMin/Max). The main audio playback always uses the original clip
-      # so that the display acts as a zoom/crop, not a content change.
-      # Frequency-filtered audio is only produced for the selection tool
-      # (spec_selection observer below).
-      audio_url <- paste0("spectrograms/", input$seq)
-
-      session$sendCustomMessage("ws_load", list(
-        url             = audio_url,
-        seek            = seek_target,
-        detection_start = buffer_val,
-        detection_end   = buffer_val + analysis_range,
-        freq_max        = eff_freq_max,
-        freq_min        = eff_freq_min,
-        sample_rate     = if (is.na(sr)) 44100L else as.integer(sr)
-      ))
     }
+
+    session$sendCustomMessage("ws_load", list(
+      url             = paste0("spectrograms/", seq_val),
+      seek            = seek_target,
+      detection_start = buffer_val,
+      detection_end   = buffer_val + analysis_range,
+      freq_max        = eff_freq_max,
+      freq_min        = eff_freq_min,
+      sample_rate     = if (is.na(sr)) 44100L else as.integer(sr)
+    ))
+  }
+
+  # Recording changed → load immediately; read freq values with isolate() so
+  # this observer does NOT re-fire when freq inputs settle after their debounce.
+  observeEvent(input$seq, {
+    req(input$seq, project_data())
+    do_ws_load(input$seq, isolate(freq_max_d()), isolate(freq_min_d()))
   })
+
+  # Frequency range changed by user → reload current recording.
+  # ignoreInit = TRUE prevents firing on app startup when the debounced
+  # reactives first compute their initial values (which would double-fire
+  # ws_load alongside the input$seq observer above).
+  observeEvent(list(freq_max_d(), freq_min_d()), {
+    req(input$seq, project_data())
+    do_ws_load(input$seq, freq_max_d(), freq_min_d())
+  }, ignoreInit = TRUE)
 
   # ── Spectrogram region selection → filtered audio playback ──────────────────
   # Receives {spec_id, t_start, t_end, f_min, f_max} from the canvas overlay in
@@ -365,6 +381,8 @@ app_server <- function(input, output, session, pool) {
       # WAV → MP3 → base64 data-URL
       tmp_wav <- tempfile(fileext = ".wav")
       tmp_mp3 <- tempfile(fileext = ".mp3")
+      # print(tmp_mp3)
+      # print(tmp_wav)
       on.exit({ unlink(tmp_wav); unlink(tmp_mp3) }, add = TRUE)
       tuneR::writeWave(wave, tmp_wav)
       av::av_audio_convert(tmp_wav, tmp_mp3, verbose = FALSE)
