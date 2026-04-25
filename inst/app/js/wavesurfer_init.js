@@ -1,4 +1,4 @@
-console.log('[evalpam] wavesurfer_init loaded — v69 — ' + new Date().toISOString());
+console.log('[evalpam] wavesurfer_init loaded — v70 — ' + new Date().toISOString());
 
 // Dynamic imports so this file can be loaded as a plain <script> by
 // bundle_resources() without triggering "import only at top level of module".
@@ -485,12 +485,19 @@ $(document).on('shiny:connected', async function() {
                 if (changed > 0) {
                   clearTimeout(safeReveal);
                   tc.style.opacity = '1';
-                  // Remove stale siblings at tc's own level (other canvases
-                  // inside the same wrapper div from earlier renders).
+                  // Remove stale raw WaveSurfer canvases at tc's own level.
+                  // Preserve our sel-canvas overlay and any other non-canvas
+                  // elements (e.g. spec-overlay div) that onSpecCanvasReady
+                  // appended to the same parent after 'ready' fired (~16 ms
+                  // before this first tryNorm at 80 ms).
                   try {
                     if (tc.parentElement) {
                       for (const sib of [...tc.parentElement.children]) {
-                        if (sib !== tc) sib.remove();
+                        if (sib !== tc &&
+                            sib.tagName === 'CANVAS' &&
+                            !sib.classList.contains('sel-canvas')) {
+                          sib.remove();
+                        }
                       }
                     }
                   } catch(e) {}
