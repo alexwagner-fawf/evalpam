@@ -1,4 +1,4 @@
-console.log('[evalpam] wavesurfer_init loaded — v68 — ' + new Date().toISOString());
+console.log('[evalpam] wavesurfer_init loaded — v69 — ' + new Date().toISOString());
 
 // Dynamic imports so this file can be loaded as a plain <script> by
 // bundle_resources() without triggering "import only at top level of module".
@@ -14,6 +14,7 @@ let ws = null;
 let regionsPlugin = null;
 let currentSpecId = null;
 let selectionAudioCtx = null;
+let _loopSource = null;  // Web Audio filtered loop source; stopped & nulled between loads
 let _spectrogramColormap = null; // output palette (blackPoint=0.35) used by normalizeSpectrogramPerRow
 let _wsRenderColormap   = null; // linear render palette (blackPoint=0) passed to WaveSurfer colorMap
 
@@ -297,7 +298,9 @@ $(document).on('shiny:connected', async function() {
     _lastLoad = {url: msg.url, freq_max: msg.freq_max, freq_min: msg.freq_min, t: now};
     _firstNormDone = false;
 
+    if (_loopSource) { try { _loopSource.stop(); } catch(e) {} _loopSource = null; }
     if (ws) {
+      try { ws.setVolume(1); } catch(e) {}
       try { ws.destroy(); } catch(e) {}
       ws = null;
       regionsPlugin = null;
@@ -401,6 +404,17 @@ $(document).on('shiny:connected', async function() {
     // Capture this instance so ready/poll callbacks can bail if a newer
     // ws_load arrived and destroyed this instance.
     const myWs = ws;
+
+    // Loop-playback state for the spectrogram selection box.
+    // Set by the mouseup handler; cleared on pause or new ws_load.
+    let _loopStart = null, _loopEnd = null;
+
+    // Stop any running frequency-filtered Web Audio loop and restore WaveSurfer volume.
+    function _stopFilteredLoop() {
+      _loopEnd = null;
+      if (_loopSource) { try { _loopSource.stop(); } catch(e) {} _loopSource = null; }
+      if (ws) { try { ws.setVolume(1); } catch(e) {} }
+    }
 
     // ── Spectrogram canvas observer ──────────────────────────────────────────
     // MutationObserver fires synchronously before browser repaints, so setting
@@ -698,23 +712,49 @@ $(document).on('shiny:connected', async function() {
           console.log('[evalpam] spec_selection →', JSON.stringify(payload));
           Shiny.setInputValue('spec_selection', payload, { priority: 'event' });
 
-          // Loop-play the selected time window immediately.
-          // RegionsPlugin handles the seek-back automatically when loop=true.
-          if (regionsPlugin && ws && rw >= 5) {
-            try {
-              regionsPlugin.clearRegions();
-              const region = regionsPlugin.addRegion({
-                start:  tStart,
-                end:    tEnd,
-                loop:   true,
-                drag:   false,
-                resize: false,
-                color:  'rgba(46,204,113,0.10)'
-              });
-              ws.play(tStart);
-            } catch(e) {
-              console.warn('[evalpam] region playback failed:', e);
+          // Frequency-filtered loop via Web Audio API.
+          // AudioBufferSourceNode (loop=true, loopStart/loopEnd) → highpass →
+          // lowpass → destination.  The decoded buffer is already in memory so
+          // there is no server round-trip and no latency.
+          // WaveSurfer is muted so its audio does not double the filtered source;
+          // ws.play() is still called so the cursor stays in sync, and the
+          // audioprocess handler seeks the cursor back at loopEnd.
+          if (ws) {
+            _stopFilteredLoop();
+            _loopStart = tStart;
+            _loopEnd   = tEnd;
+
+            const audioBuffer = ws.getDecodedData ? ws.getDecodedData() : null;
+            if (audioBuffer && selectionAudioCtx) {
+              const src      = selectionAudioCtx.createBufferSource();
+              src.buffer     = audioBuffer;
+              src.loop       = true;
+              src.loopStart  = tStart;
+              src.loopEnd    = tEnd;
+
+              const hp = selectionAudioCtx.createBiquadFilter();
+              hp.type = 'highpass';
+              hp.frequency.value = Math.max(20, Math.round(Math.max(0, fMin2)));
+
+              const lp = selectionAudioCtx.createBiquadFilter();
+              lp.type = 'lowpass';
+              lp.frequency.value = Math.min(
+                selectionAudioCtx.sampleRate * 0.499,
+                Math.round(fMax2)
+              );
+
+              src.connect(hp);
+              hp.connect(lp);
+              lp.connect(selectionAudioCtx.destination);
+              src.start(0, tStart);
+              _loopSource = src;
+
+              try { ws.setVolume(0); } catch(e) {}
+              console.log('[evalpam] filtered loop —',
+                tStart.toFixed(2), '–', tEnd.toFixed(2), 's |',
+                Math.round(Math.max(0, fMin2)), '–', Math.round(fMax2), 'Hz');
             }
+            ws.play(tStart);
           }
         });
       } // end onSpecCanvasReady
@@ -748,9 +788,12 @@ $(document).on('shiny:connected', async function() {
     });
 
     ws.on('audioprocess', updateControls);
+    ws.on('audioprocess', ct => {
+      if (_loopEnd !== null && ct >= _loopEnd) ws.setTime(_loopStart);
+    });
     ws.on('seeking',      updateControls);
     ws.on('play',         updateControls);
-    ws.on('pause',        updateControls);
+    ws.on('pause',        () => { updateControls(); _stopFilteredLoop(); });
 
     // 'redraw' handler intentionally removed (v61).
     // It set opacity:0 on already-normalized canvases whenever ws.play()
