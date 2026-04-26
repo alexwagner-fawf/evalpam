@@ -1,4 +1,4 @@
-console.log('[evalpam] wavesurfer_init loaded — v70 — ' + new Date().toISOString());
+console.log('[evalpam] wavesurfer_init loaded — v71 — ' + new Date().toISOString());
 
 // Dynamic imports so this file can be loaded as a plain <script> by
 // bundle_resources() without triggering "import only at top level of module".
@@ -449,7 +449,8 @@ $(document).on('shiny:connected', async function() {
             const candidates = node.tagName === 'CANVAS' ? [node]
               : [...node.querySelectorAll('canvas')];
             for (const tc of candidates) {
-              if (tc.height <= 60 || tc._evalpamNormDone) continue;
+              if (tc.height <= 60 || tc._evalpamNormDone ||
+                  tc.classList.contains('sel-canvas')) continue;
 
               // Block ALL future renders immediately when the canvas is first
               // detected — before normalization, before 'ready', before play().
