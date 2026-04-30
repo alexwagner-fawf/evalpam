@@ -1,3 +1,31 @@
+# Try the OS keychain first; fall back to the legacy base64 .Renviron entry
+# so that existing deployments keep working until setup_app() is re-run.
+.resolve_db_password <- function(pg_user) {
+  pw <- tryCatch(
+    keyring::key_get("evalpam", pg_user),
+    error = function(e) NULL
+  )
+  if (!is.null(pw)) return(pw)
+
+  legacy <- Sys.getenv("evalpam_pw", unset = "")
+  if (nzchar(legacy)) {
+    warning(
+      "Database password read from legacy .Renviron entry (base64). ",
+      "Re-run setup_app() to migrate to the OS keychain.",
+      call. = FALSE
+    )
+    return(rawToChar(base64enc::base64decode(legacy)))
+  }
+
+  stop(
+    "No database password found in the OS keychain or .Renviron.\n",
+    "Run setup_app() to store the password securely.\n",
+    "On headless Linux servers, set KEYRING_BACKEND=file and ",
+    "KEYRING_FILE_PASSWORD before calling setup_app()."
+  )
+}
+
+
 #' set_db_pool
 #'
 #' @description Establish a pool connection using credentials or from golem-config.yml. Password is retrieved from the OS keychain via keyring.
@@ -25,15 +53,7 @@ set_db_pool <- function(user = NULL,
                  port = ifelse(is.null(port), get_golem_config("pg_port"), port),
                  dbname = ifelse(is.null(dbname), get_golem_config("pg_dbname"), dbname),
                  password = if (is.null(password)) {
-                   tryCatch(
-                     keyring::key_get("evalpam", get_golem_config("pg_user")),
-                     error = function(e) stop(
-                       "Could not retrieve database password from keychain.\n",
-                       "On headless Linux servers, ensure KEYRING_BACKEND=file ",
-                       "and KEYRING_FILE_PASSWORD are set in the server environment.\n",
-                       "Original error: ", conditionMessage(e)
-                     )
-                   )
+                   .resolve_db_password(get_golem_config("pg_user"))
                  } else {
                    password
                  }
