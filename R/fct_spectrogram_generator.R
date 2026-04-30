@@ -180,6 +180,171 @@ build_spectrogram_db <- function(data, pool, padding_s = 5, analysis_range = 3,
 
 
 
+#' Backfill audio blobs for existing spectrogram rows
+#'
+#' Finds spectrogram rows that have no \code{audio_data} blob (created before
+#' the WaveSurfer implementation), re-extracts the corresponding audio clip
+#' from the source file on disk, and writes it back to
+#' \code{import.spectrograms.audio_data}.
+#'
+#' The clip boundaries are read from the existing DB columns:
+#' \code{clip_start = begin_time_ms / 1000 - buffer_ms},
+#' \code{total_time = duration_ms}.
+#'
+#' @param pool A DBI connection pool.
+#' @param spectrogram_ids Integer vector. If supplied, only those rows are
+#'   processed; if \code{NULL} (default) all rows with \code{audio_data IS NULL}
+#'   are processed.
+#' @param output_dir Character or \code{NULL}. When provided, each MP3 is also
+#'   written to \code{<output_dir>/<spectrogram_id>.mp3}. Useful when the app
+#'   is configured to serve clips from disk instead of (or in addition to) the DB.
+#' @param verbose Logical. Show a progress bar. Default \code{TRUE}.
+#'
+#' @return A list: \code{n_ok} (rows updated), \code{n_skipped} (source file
+#'   not found), \code{n_error} (other errors), \code{errors} (detail list).
+#'
+#' @importFrom DBI dbGetQuery dbExecute
+#' @importFrom pool poolWithTransaction
+#' @importFrom av av_audio_convert
+#' @export
+backfill_audio_blobs <- function(pool,
+                                 spectrogram_ids = NULL,
+                                 output_dir      = NULL,
+                                 verbose         = TRUE) {
+
+  if (!is.null(output_dir) && !dir.exists(output_dir))
+    dir.create(output_dir, recursive = TRUE)
+
+  # ── 1. Fetch candidate rows ──────────────────────────────────────────────
+  if (!is.null(spectrogram_ids)) {
+    id_csv <- paste(as.integer(spectrogram_ids), collapse = ", ")
+    q <- sprintf("
+      SELECT s.spectrogram_id,
+             s.audio_file_id,
+             s.begin_time_ms,
+             s.buffer_ms,
+             s.duration_ms,
+             af.relative_path,
+             d.deployment_path
+      FROM   import.spectrograms s
+      JOIN   import.audio_files  af ON af.audio_file_id  = s.audio_file_id
+      JOIN   import.deployments  d  ON d.deployment_id   = af.deployment_id
+      WHERE  s.spectrogram_id IN (%s)
+        AND  s.audio_data IS NULL
+      ORDER  BY s.spectrogram_id
+    ", id_csv)
+    rows <- DBI::dbGetQuery(pool, q)
+  } else {
+    q <- "
+      SELECT s.spectrogram_id,
+             s.audio_file_id,
+             s.begin_time_ms,
+             s.buffer_ms,
+             s.duration_ms,
+             af.relative_path,
+             d.deployment_path
+      FROM   import.spectrograms s
+      JOIN   import.audio_files  af ON af.audio_file_id  = s.audio_file_id
+      JOIN   import.deployments  d  ON d.deployment_id   = af.deployment_id
+      WHERE  s.audio_data IS NULL
+      ORDER  BY s.spectrogram_id
+    "
+    rows <- DBI::dbGetQuery(pool, q)
+  }
+
+  n_total <- nrow(rows)
+  if (n_total == 0L) {
+    message("No spectrogram rows with missing audio_data found.")
+    return(invisible(list(n_ok = 0L, n_skipped = 0L, n_error = 0L, errors = list())))
+  }
+
+  message(sprintf("Backfilling audio blobs for %d spectrogram row(s)...", n_total))
+  if (verbose) pb <- utils::txtProgressBar(min = 0, max = n_total, style = 3)
+
+  n_ok      <- 0L
+  n_skipped <- 0L
+  errors    <- list()
+
+  # ── 2. Process row by row ────────────────────────────────────────────────
+  for (i in seq_len(n_total)) {
+    row <- rows[i, ]
+
+    result <- tryCatch({
+
+      # Reconstruct clip boundaries from stored values.
+      # buffer_ms and duration_ms were inserted in seconds (see build_audio_clips_db).
+      clip_start_s <- as.numeric(row$begin_time_ms) / 1000 - as.numeric(row$buffer_ms)
+      clip_start_s <- max(0, clip_start_s)
+      clip_duration_s <- as.numeric(row$duration_ms)
+
+      rel_clean <- sub("^[/\\\\]+", "", row$relative_path)
+      full_path <- file.path(row$deployment_path, rel_clean)
+
+      if (!file.exists(full_path)) {
+        n_skipped <<- n_skipped + 1L
+        errors[[length(errors) + 1L]] <<- list(
+          spectrogram_id = row$spectrogram_id,
+          type  = "file_not_found",
+          error = paste("Source audio not found:", full_path)
+        )
+        return("skipped")
+      }
+
+      tmp_mp3 <- tempfile(fileext = ".mp3")
+      on.exit(if (file.exists(tmp_mp3)) file.remove(tmp_mp3), add = TRUE)
+
+      av::av_audio_convert(
+        full_path, tmp_mp3,
+        start_time = clip_start_s,
+        total_time = clip_duration_s,
+        verbose    = FALSE
+      )
+
+      raw_audio <- readBin(tmp_mp3, "raw", file.info(tmp_mp3)$size)
+
+      DBI::dbExecute(pool,
+        "UPDATE import.spectrograms SET audio_data = $1 WHERE spectrogram_id = $2",
+        params = list(list(raw_audio), row$spectrogram_id)
+      )
+
+      if (!is.null(output_dir)) {
+        disk_path <- file.path(output_dir, paste0(row$spectrogram_id, ".mp3"))
+        file.copy(tmp_mp3, disk_path, overwrite = TRUE)
+      }
+
+      n_ok <<- n_ok + 1L
+      "ok"
+
+    }, error = function(e) {
+      errors[[length(errors) + 1L]] <<- list(
+        spectrogram_id = row$spectrogram_id,
+        type  = "error",
+        error = conditionMessage(e)
+      )
+      "error"
+    })
+
+    if (verbose) utils::setTxtProgressBar(pb, i)
+  }
+
+  if (verbose) close(pb)
+
+  n_error <- length(errors) - n_skipped
+  message(sprintf(
+    "Done. Updated: %d  |  File not found: %d  |  Errors: %d",
+    n_ok, n_skipped, n_error
+  ))
+
+  if (length(errors) > 0) {
+    message("Failed entries:")
+    for (e in errors)
+      message(sprintf("  spectrogram_id=%s [%s]: %s", e$spectrogram_id, e$type, e$error))
+  }
+
+  invisible(list(n_ok = n_ok, n_skipped = n_skipped, n_error = n_error, errors = errors))
+}
+
+
 #' Generate Audio Clips (mp3) for Verification
 #'
 #' Ersetzt build_spectrogram_db(). Statt Video wird nur ein Audio-Clip

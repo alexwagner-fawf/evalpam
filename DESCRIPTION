@@ -24,6 +24,7 @@ Imports:
     golem,
     here,
     jsonlite,
+    keyring,
     lubridate,
     pool,
     readr,

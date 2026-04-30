@@ -1,12 +1,12 @@
 #' set_db_pool
 #'
-#' @description Establish a pool connection using credentials or from golem-config.yml. Password is currently stored in the .Renviron file.
+#' @description Establish a pool connection using credentials or from golem-config.yml. Password is retrieved from the OS keychain via keyring.
 #'
 #' @param user character, user name for postgres connection, if NULL it will read from golem-config yml description
 #' @param host character, host for postgres connection, if NULL it will read from golem-config yml description
 #' @param port integer, port for postgres connection, if NULL it will read from golem-config yml description
 #' @param dbname character, dbname for postgres connection, if NULL it will read from golem-config yml description
-#' @param password character, password name for postgres connection, if NULL it will read from .Renviron (with obfuscation)
+#' @param password character, password for postgres connection, if NULL it is read from the OS keychain via keyring
 #'
 #' @return A pool connection, FALSE if connection did not work. In running shiny session, a shinyalert will appear.
 #'
@@ -24,9 +24,19 @@ set_db_pool <- function(user = NULL,
                  host = ifelse(is.null(host), get_golem_config("pg_host"), host),
                  port = ifelse(is.null(port), get_golem_config("pg_port"), port),
                  dbname = ifelse(is.null(dbname), get_golem_config("pg_dbname"), dbname),
-                 password = ifelse(is.null(password),
-                                   rawToChar(base64enc::base64decode(Sys.getenv("evalpam_pw"))),
-                                             password)
+                 password = if (is.null(password)) {
+                   tryCatch(
+                     keyring::key_get("evalpam", get_golem_config("pg_user")),
+                     error = function(e) stop(
+                       "Could not retrieve database password from keychain.\n",
+                       "On headless Linux servers, ensure KEYRING_BACKEND=file ",
+                       "and KEYRING_FILE_PASSWORD are set in the server environment.\n",
+                       "Original error: ", conditionMessage(e)
+                     )
+                   )
+                 } else {
+                   password
+                 }
     )
   },
   error = function(e){

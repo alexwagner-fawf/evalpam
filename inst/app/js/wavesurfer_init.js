@@ -4,10 +4,10 @@ console.log('[evalpam] wavesurfer_init loaded — v71 — ' + new Date().toISOSt
 // bundle_resources() without triggering "import only at top level of module".
 // Imports start loading immediately; the shiny:connected handler awaits them.
 const _wsReady = Promise.all([
-  import('https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.esm.js'),
-  import('https://unpkg.com/wavesurfer.js@7/dist/plugins/spectrogram.esm.js'),
-  import('https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.esm.js'),
-  import('https://unpkg.com/wavesurfer.js@7/dist/plugins/timeline.esm.js')
+  import(window._wsLibBase + '/wavesurfer.esm.js'),
+  import(window._wsLibBase + '/plugins/spectrogram.esm.js'),
+  import(window._wsLibBase + '/plugins/regions.esm.js'),
+  import(window._wsLibBase + '/plugins/timeline.esm.js')
 ]);
 
 let ws = null;
