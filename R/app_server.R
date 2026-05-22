@@ -616,61 +616,44 @@ app_server <- function(input, output, session, pool) {
   })
 
 
+  inserts_to_do <- list()
+  selected_ids <- input$inSelect
 
-  # ---- 10. SAVE Logic (KORRIGIERT) ----
-  observeEvent(input$add_btn, {
-    req(input$seq, res_auth$user_id)
-
-    df <- current_file_df()
-    if(nrow(df) == 0) return()
-
-    aid <- df$audio_file_id[1]
-    start_ms <- as.integer(min(df$start) * 1000)
-    end_ms   <- as.integer(max(df$end_sec) * 1000)
-    fixed_type_id <- df$required_annotation_type_id[1]
-    if(is.na(fixed_type_id)) fixed_type_id <- 1
-
-    mode <- project_mode()
-    target_species_val <- if(mode == "binary" && !is.null(input$target_species) && input$target_species != "") {
-      as.integer(input$target_species)
-    } else NULL
-
-    inserts_to_do <- list()
-    selected_ids <- input$inSelect
-
-    if (!is.null(selected_ids) && length(selected_ids) > 0) {
-      for(id_str in selected_ids) {
-        sid <- as.integer(id_str)
-        if(!is.na(sid)) {
-          input_id <- paste0("beh_", sid)
-          beh_val <- input[[input_id]]
-          if(is.null(beh_val) || beh_val == "" || beh_val == "NA") {
-            beh_val_sql <- NA_integer_
-          } else {
-            beh_val_sql <- as.integer(beh_val)
-          }
-          cert_input_id <- paste0("cert_", sid)
-          cert_val <- input[[cert_input_id]]
-          cert_val_sql <- if(is.null(cert_val) || cert_val == "") 1L else as.integer(cert_val)
-
-          inserts_to_do[[length(inserts_to_do) + 1]] <- list(sid = sid, bid = beh_val_sql, cid = cert_val_sql, ab_id = NA_integer_)
-          if (!is.null(input$abiotic_sounds) && length(input$abiotic_sounds) > 0) {
-            for(ab_id_str in input$abiotic_sounds) {
-              ab_id <- as.integer(ab_id_str)
-              if(!is.na(ab_id)) {
-                inserts_to_do[[length(inserts_to_do) + 1]] <- list(
-                  sid = NA_integer_,
-                  bid = NA_integer_,
-                  cid = 1L, # Standard-Sicherheit
-                  ab_id = ab_id
-                )
-              }
-            }
-          }
-
+  # --- BLOCK 1: VÖGEL ---
+  if (!is.null(selected_ids) && length(selected_ids) > 0) {
+    for(id_str in selected_ids) {
+      sid <- as.integer(id_str)
+      if(!is.na(sid)) {
+        input_id <- paste0("beh_", sid)
+        beh_val <- input[[input_id]]
+        if(is.null(beh_val) || beh_val == "" || beh_val == "NA") {
+          beh_val_sql <- NA_integer_
+        } else {
+          beh_val_sql <- as.integer(beh_val)
         }
+        cert_input_id <- paste0("cert_", sid)
+        cert_val <- input[[cert_input_id]]
+        cert_val_sql <- if(is.null(cert_val) || cert_val == "") 1L else as.integer(cert_val)
+
+        inserts_to_do[[length(inserts_to_do) + 1]] <- list(sid = sid, bid = beh_val_sql, cid = cert_val_sql, ab_id = NA_integer_)
       }
     }
+  }
+
+  # --- BLOCK 2: HINTERGRUNDGERÄUSCHE ---
+  if (!is.null(input$abiotic_sounds) && length(input$abiotic_sounds) > 0) {
+    for(ab_id_str in input$abiotic_sounds) {
+      ab_id <- as.integer(ab_id_str)
+      if(!is.na(ab_id)) {
+        inserts_to_do[[length(inserts_to_do) + 1]] <- list(
+          sid = NA_integer_,
+          bid = NA_integer_,
+          cid = 1L, # Standard-Sicherheit
+          ab_id = ab_id
+        )
+      }
+    }
+  }
 
     tryCatch({
       pool::poolWithTransaction(pool, function(conn) {
