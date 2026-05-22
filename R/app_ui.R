@@ -86,6 +86,16 @@ app_ui <- function(request) {
             )
           ),
 
+
+          hr(),
+          selectizeInput(
+            inputId = "abiotic_sounds",
+            label = "Hintergrundgeräusche (Abiotic Sounds):",
+            choices = NULL, # Wird dynamisch vom Server befüllt
+            multiple = TRUE,
+            width = "100%",
+            options = list(placeholder = "Wird geladen / Loading...")
+          ),
           hr(),
 
           # 2. Dynamische Verhaltens-Liste (NEU)
