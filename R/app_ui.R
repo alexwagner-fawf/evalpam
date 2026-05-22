@@ -204,6 +204,10 @@ golem_add_external_resources <- function() {
   #   )
   # )
 
+  # Serve vendored WaveSurfer files from the package; inject the base URL so
+  # the inline script can resolve the ESM imports without touching the CDN.
+  shiny::addResourcePath("wslib", app_sys("app/www/wavesurfer"))
+
   # Inline the JS so it is always fresh — no caching, no resource-path
   # resolution issues with load_all() / app_sys().
   js_content <- paste(readLines(app_sys("app/js/wavesurfer_init.js")), collapse = "\n")
@@ -212,6 +216,7 @@ golem_add_external_resources <- function() {
     tags$head(
       favicon(ico = "favicon_512px", ext = "png"),
       bundle_resources(path = app_sys("app/www"), app_title = "evalpam"),
+      tags$script(HTML("window._wsLibBase = '/wslib';")),
       tags$script(HTML(js_content))
     )
   )

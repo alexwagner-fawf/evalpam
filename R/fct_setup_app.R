@@ -75,8 +75,23 @@ setup_app <- function(user = "postgres",
     if(is.null(renviron_dir)) renviron_dir <- here::here()
 
     setup_renviron(filepath = paste0(renviron_dir, "/.Renviron"),
-                   overwrite = TRUE,
-                   evalpam_pw = evalpam_pw)
+                   overwrite = TRUE)
+
+    tryCatch({
+      keyring::key_set_with_value(
+        service  = "evalpam",
+        username = evalpam_username,
+        password = evalpam_pw
+      )
+      message("✓ Database password stored securely in system keychain")
+    }, error = function(e) {
+      stop(
+        "Could not store the database password in the system keychain.\n",
+        "On headless Linux servers, set these environment variables before calling setup_app():\n",
+        "  Sys.setenv(KEYRING_BACKEND = 'file', KEYRING_FILE_PASSWORD = '<master-password>')\n",
+        "Original error: ", conditionMessage(e)
+      )
+    })
 
   if(initialize_db){
     setup_db(pool = pool,
@@ -147,7 +162,7 @@ setup_db <- function(user, host, port, evalpam_dbname, password, pool, config, d
 
     for(statement in statements){
       statement <- glue::glue_sql(statement,
-                                  DB_PASSWORD_EVALPAM_USER = rawToChar(base64enc::base64decode(Sys.getenv("evalpam_pw"))),
+                                  DB_PASSWORD_EVALPAM_USER = keyring::key_get("evalpam", config$default$pg_user),
                                   DB_EVALPAM_USER = config$default$pg_user,
                                   DB_NAME = config$default$pg_dbname,
                                   .con = pool)
