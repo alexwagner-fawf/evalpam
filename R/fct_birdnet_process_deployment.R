@@ -214,7 +214,7 @@ run_birdnet_inference <- function(audio_files_subset, bnm, birdnet_params, setti
         dplyr::filter(!is.na(species_id)) |>
         dplyr::mutate(
           behavior_id = NA_integer_,
-          confidence = as.integer(round(confidence * 10000)),
+          confidence = as.integer(round(confidence * 1000)),
           error_type = NA_character_
         ) |>
         dplyr::mutate(analysed_at = prediction_time) |>
