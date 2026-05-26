@@ -22,6 +22,8 @@ app_server <- function(input, output, session, pool) {
     check_credentials = check_credentials_db(pool)
   )
 
+  save_trigger <- reactiveVal(0L)
+
   # ---- 2. Load Metadata (Species & Behavior) ----
 
   # A) Load Species List
@@ -124,6 +126,7 @@ app_server <- function(input, output, session, pool) {
 
   # Status aller Gruppen für die aktuelle Zielart
   occupancy_status <- reactive({
+    save_trigger()  # Dependency für manuelles Invalidieren
     req(input$selected_project)
     if (project_mode() != "binary") return(NULL)
     if (is.null(input$target_species) || input$target_species == "") return(NULL)
@@ -147,6 +150,7 @@ app_server <- function(input, output, session, pool) {
      AND gt.begin_time_ms = s.begin_time_ms
     WHERE og.project_id = $1
     GROUP BY og.group_id, og.group_name, og.target_count
+    ORDER BY og.group_name
   "
     tryCatch(
       DBI::dbGetQuery(pool, q,
@@ -158,21 +162,55 @@ app_server <- function(input, output, session, pool) {
 
   # UI-Hinweis
   output$occupancy_info_ui <- renderUI({
+    if (!isTRUE(input$use_occupancy_filter)) return(NULL)
+    if (project_mode() != "binary") return(NULL)
+    req(input$target_species, input$target_species != "")
+
     st <- occupancy_status()
     if (is.null(st) || nrow(st) == 0) return(NULL)
 
+    # Welche Gruppen enthalten den aktuell ausgewählten Schnipsel?
+    current_groups <- integer(0)
+    if (!is.null(input$seq) && input$seq != "") {
+      spec_id <- tools::file_path_sans_ext(input$seq)
+      current_groups <- tryCatch(
+        DBI::dbGetQuery(pool,
+                        "SELECT group_id FROM import.spectrogram_groups WHERE spectrogram_id = $1",
+                        params = list(as.integer(spec_id)))$group_id,
+        error = function(e) integer(0)
+      )
+    }
+
     n_done <- sum(st$n_hits >= st$target_count)
-    n_open <- nrow(st) - n_done
+
+    # Pro-Gruppe-Zeilen
+    group_rows <- lapply(seq_len(nrow(st)), function(i) {
+      is_current <- st$group_id[i] %in% current_groups
+      is_done    <- st$n_hits[i] >= st$target_count[i]
+      color      <- if (is_done) "#3c763d" else if (is_current) "#31708f" else "#888"
+      weight     <- if (is_current) "bold" else "normal"
+      bg         <- if (is_current) "#d9edf7" else "transparent"
+      icon_chr   <- if (is_done) "\u2705" else if (is_current) "\U0001F3AF" else "\u25CB"
+
+      tags$div(
+        style = sprintf("color: %s; font-weight: %s; font-size: 12px; padding: 2px 4px; background: %s; border-radius: 3px;",
+                        color, weight, bg),
+        sprintf("%s %s: %d / %d", icon_chr,
+                st$group_name[i],
+                as.integer(st$n_hits[i]),
+                as.integer(st$target_count[i]))
+      )
+    })
 
     div(style = "padding: 8px 12px; margin-bottom: 10px;
-               background: #fcf8e3; border-left: 4px solid #f0ad4e;
-               border-radius: 4px; font-size: 13px;",
-        icon("bullseye"), tags$strong(" Occupancy-Filter aktiv"), br(),
-        tags$small(sprintf("%d von %d Gruppen erledigt – Schnipsel erledigter Gruppen werden übersprungen.",
-                           n_done, nrow(st)))
+                 background: #fcf8e3; border-left: 4px solid #f0ad4e;
+                 border-radius: 4px; font-size: 13px;",
+        icon("bullseye"),
+        tags$strong(sprintf(" Occupancy: %d/%d Gruppen erledigt",
+                            as.integer(n_done), nrow(st))),
+        tags$div(style = "margin-top: 6px;", group_rows)
     )
   })
-
   # ---- 4c. Zielart-Auswahl (Filter + Sort) ----
   output$target_species_ui <- renderUI({
     req(project_mode(), species_list(), input$species_lang)
@@ -185,14 +223,20 @@ app_server <- function(input, output, session, pool) {
     choices <- setNames(as.character(df$species_id), labels)
     choices <- choices[order(names(choices))]
 
+    # Aktuelle Auswahl erhalten, sonst springt sie beim Sprachwechsel auf den
+    # ersten Wert der neu sortierten Liste.
+    current_sel <- isolate(input$target_species)
+
     if(project_mode() == "binary") {
       tagList(
-        selectInput("target_species", "Zielart / Target Species:", choices = choices),
+        selectInput("target_species", "Zielart / Target Species:",
+                    choices = choices, selected = current_sel),
         tags$small("Modus: Binary (nur Zielart bewerten)", style = "color: #888;")
       )
     } else {
       selectInput("target_species", "Sortieren nach Art / Sort by Species:",
-                  choices = c("\u2014 Alle \u2014" = "", choices))
+                  choices = c("\u2014 Alle \u2014" = "", choices),
+                  selected = current_sel)
     }
   })
 
@@ -252,6 +296,7 @@ app_server <- function(input, output, session, pool) {
 
   # Update File List
   filtered_files <- reactive({
+    save_trigger()  # Dependency für manuelles Invalidieren
     req(project_data())
     df <- project_data()
     mode <- project_mode()
@@ -799,6 +844,8 @@ app_server <- function(input, output, session, pool) {
       })
 
       showNotification("Gespeichert!", type = "message")
+      # Trigger reactive re-evaluation of DB-dependent reactives
+      save_trigger(save_trigger() + 1L)
 
       # --- Occupancy-Check: ist gerade eine Gruppe fertig geworden? ---
       if (project_mode() == "binary" &&
@@ -811,14 +858,18 @@ app_server <- function(input, output, session, pool) {
     FROM import.occupancy_groups og
     JOIN import.spectrogram_groups sg USING (group_id)
     JOIN import.spectrograms s ON s.spectrogram_id = sg.spectrogram_id
-    JOIN import.ground_truth_annotations gt
+    LEFT JOIN import.ground_truth_annotations gt
       ON gt.audio_file_id = s.audio_file_id
      AND gt.begin_time_ms = s.begin_time_ms
-    WHERE s.audio_file_id = $1
-      AND s.begin_time_ms = $2
-      AND gt.species_id = $3
-      AND gt.certainty_id = 1
-      AND gt.is_present = TRUE
+     AND gt.species_id = $3
+     AND gt.certainty_id = 1
+     AND gt.is_present = TRUE
+    WHERE og.group_id IN (
+      SELECT sg2.group_id
+      FROM import.spectrogram_groups sg2
+      JOIN import.spectrograms s2 USING (spectrogram_id)
+      WHERE s2.audio_file_id = $1 AND s2.begin_time_ms = $2
+    )
     GROUP BY og.group_id, og.group_name, og.target_count
     HAVING COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms)) >= og.target_count
   "
@@ -827,12 +878,13 @@ app_server <- function(input, output, session, pool) {
                           params = list(aid, start_ms, as.integer(input$target_species))),
           error = function(e) data.frame()
         )
-
         if (nrow(just_done) > 0) {
           for (i in seq_len(nrow(just_done))) {
             showNotification(
               sprintf("\U0001F389 Gruppe '%s' fertig (%d/%d sichere Treffer) – restliche Schnipsel werden übersprungen.",
-                      just_done$group_name[i], just_done$n_hits[i], just_done$target_count[i]),
+                      just_done$group_name[i],
+                      as.integer(just_done$n_hits[i]),
+                      as.integer(just_done$target_count[i])),
               type = "message", duration = 7
             )
           }
