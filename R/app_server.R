@@ -122,6 +122,57 @@ app_server <- function(input, output, session, pool) {
     }, error = function(e) "full")
   })
 
+  # Status aller Gruppen für die aktuelle Zielart
+  occupancy_status <- reactive({
+    req(input$selected_project)
+    if (project_mode() != "binary") return(NULL)
+    if (is.null(input$target_species) || input$target_species == "") return(NULL)
+    if (isTRUE(input$use_occupancy_filter) == FALSE) return(NULL)
+
+    q <- "
+    SELECT
+      og.group_id,
+      og.group_name,
+      og.target_count,
+      COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
+        FILTER (WHERE gt.species_id = $2
+                  AND gt.certainty_id = 1
+                  AND gt.is_present = TRUE) AS n_hits,
+      COUNT(DISTINCT sg.spectrogram_id) AS n_total_spectrograms
+    FROM import.occupancy_groups og
+    JOIN import.spectrogram_groups sg USING (group_id)
+    JOIN import.spectrograms s ON s.spectrogram_id = sg.spectrogram_id
+    LEFT JOIN import.ground_truth_annotations gt
+      ON gt.audio_file_id = s.audio_file_id
+     AND gt.begin_time_ms = s.begin_time_ms
+    WHERE og.project_id = $1
+    GROUP BY og.group_id, og.group_name, og.target_count
+  "
+    tryCatch(
+      DBI::dbGetQuery(pool, q,
+                      params = list(as.integer(input$selected_project),
+                                    as.integer(input$target_species))),
+      error = function(e) NULL
+    )
+  })
+
+  # UI-Hinweis
+  output$occupancy_info_ui <- renderUI({
+    st <- occupancy_status()
+    if (is.null(st) || nrow(st) == 0) return(NULL)
+
+    n_done <- sum(st$n_hits >= st$target_count)
+    n_open <- nrow(st) - n_done
+
+    div(style = "padding: 8px 12px; margin-bottom: 10px;
+               background: #fcf8e3; border-left: 4px solid #f0ad4e;
+               border-radius: 4px; font-size: 13px;",
+        icon("bullseye"), tags$strong(" Occupancy-Filter aktiv"), br(),
+        tags$small(sprintf("%d von %d Gruppen erledigt – Schnipsel erledigter Gruppen werden übersprungen.",
+                           n_done, nrow(st)))
+    )
+  })
+
   # ---- 4c. Zielart-Auswahl (Filter + Sort) ----
   output$target_species_ui <- renderUI({
     req(project_mode(), species_list(), input$species_lang)
@@ -247,6 +298,36 @@ app_server <- function(input, output, session, pool) {
         done <- DBI::dbGetQuery(pool, q_done)$path
       }
       paths <- paths[!paths %in% done]
+
+      # --- NEU: Occupancy-Filter ---
+      if (!is.null(target_id) &&
+          project_mode() == "binary" &&
+          isTRUE(input$use_occupancy_filter)) {
+
+        q_done_groups <- "
+    SELECT DISTINCT CAST(s.spectrogram_id AS TEXT) || '.mp3' AS path
+    FROM import.spectrogram_groups sg
+    JOIN import.spectrograms s USING (spectrogram_id)
+    WHERE sg.group_id IN (
+      SELECT og.group_id
+      FROM import.occupancy_groups og
+      JOIN import.spectrogram_groups sg2 USING (group_id)
+      JOIN import.spectrograms s2 ON s2.spectrogram_id = sg2.spectrogram_id
+      LEFT JOIN import.ground_truth_annotations gt
+        ON gt.audio_file_id = s2.audio_file_id
+       AND gt.begin_time_ms = s2.begin_time_ms
+       AND gt.species_id = $1
+       AND gt.certainty_id = 1
+       AND gt.is_present = TRUE
+      WHERE og.project_id = $2
+      GROUP BY og.group_id, og.target_count
+      HAVING COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms)) >= og.target_count
+    )
+  "
+        done_in_groups <- DBI::dbGetQuery(pool, q_done_groups,
+                                          params = list(target_id, as.integer(input$selected_project)))$path
+        paths <- paths[!paths %in% done_in_groups]
+      }
     }
 
     paths
@@ -718,6 +799,45 @@ app_server <- function(input, output, session, pool) {
       })
 
       showNotification("Gespeichert!", type = "message")
+
+      # --- Occupancy-Check: ist gerade eine Gruppe fertig geworden? ---
+      if (project_mode() == "binary" &&
+          !is.null(input$target_species) && input$target_species != "" &&
+          isTRUE(input$use_occupancy_filter)) {
+
+        q_just_done <- "
+    SELECT og.group_name, og.target_count,
+           COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms)) AS n_hits
+    FROM import.occupancy_groups og
+    JOIN import.spectrogram_groups sg USING (group_id)
+    JOIN import.spectrograms s ON s.spectrogram_id = sg.spectrogram_id
+    JOIN import.ground_truth_annotations gt
+      ON gt.audio_file_id = s.audio_file_id
+     AND gt.begin_time_ms = s.begin_time_ms
+    WHERE s.audio_file_id = $1
+      AND s.begin_time_ms = $2
+      AND gt.species_id = $3
+      AND gt.certainty_id = 1
+      AND gt.is_present = TRUE
+    GROUP BY og.group_id, og.group_name, og.target_count
+    HAVING COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms)) >= og.target_count
+  "
+        just_done <- tryCatch(
+          DBI::dbGetQuery(pool, q_just_done,
+                          params = list(aid, start_ms, as.integer(input$target_species))),
+          error = function(e) data.frame()
+        )
+
+        if (nrow(just_done) > 0) {
+          for (i in seq_len(nrow(just_done))) {
+            showNotification(
+              sprintf("\U0001F389 Gruppe '%s' fertig (%d/%d sichere Treffer) – restliche Schnipsel werden übersprungen.",
+                      just_done$group_name[i], just_done$n_hits[i], just_done$target_count[i]),
+              type = "message", duration = 7
+            )
+          }
+        }
+      }
 
       # Navigation: filtered_files statt project_data
       current_choices <- filtered_files()
