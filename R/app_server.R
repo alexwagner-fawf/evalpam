@@ -379,8 +379,24 @@ app_server <- function(input, output, session, pool) {
   })
 
   observe({
-    req(filtered_files())
-    updateSelectizeInput(session, "seq", choices = filtered_files(), server = TRUE)
+    choices <- filtered_files()
+    current <- isolate(input$seq)
+
+    selected <- if (!is.null(current) && current %in% choices) {
+      current
+    } else if (length(choices) > 0) {
+      choices[1]
+    } else {
+      character(0)
+    }
+
+    updateSelectizeInput(
+      session,
+      "seq",
+      choices = choices,
+      selected = selected,
+      server = TRUE
+    )
   })
 
 
@@ -406,7 +422,7 @@ app_server <- function(input, output, session, pool) {
     row_data <- project_data() |> dplyr::filter(path == seq_val)
     if (nrow(row_data) == 0) return(invisible(NULL))
 
-    buffer_val     <- row_data$buffer_ms[1]
+    buffer_val     <- row_data$buffer_ms[1]/ 1000  #transform to second
     seek_target    <- max(0, buffer_val - 2)
     analysis_range <- 3L
     sr             <- row_data$sample_rate[1]
@@ -739,7 +755,7 @@ app_server <- function(input, output, session, pool) {
     labs <- switch(input$species_lang, "de"=df$species_long_de, "en"=df$species_long_en, "sci"=df$species_scientific)
     labs[is.na(labs)] <- df$species_short[is.na(labs)]
 
-    df_show <- df |> dplyr::mutate(prediction = labs) |> dplyr::select(prediction, score, start, end_sec)
+    df_show <- df |> dplyr::mutate(prediction = labs, score = score / 10000) |> dplyr::select(prediction, score, start, end_sec)
     DT::datatable(df_show, options = list(dom = 't', pageLength = 5)) |> DT::formatRound("score", 2)
   })
 
@@ -842,6 +858,12 @@ app_server <- function(input, output, session, pool) {
                        "INSERT INTO import.annotation_status (audio_file_id, user_id, begin_time_ms, end_time_ms, annotation_type_id, target_species_id) VALUES ($1, $2, $3, $4, $5, $6)",
                        list(aid, res_auth$user_id, start_ms, end_ms, fixed_type_id, target_sid_sql))
       })
+      # --- Nächstes File AUS DEM ALTEN STAND ermitteln (vor save_trigger!) ---
+      old_choices <- filtered_files()
+      curr_idx <- which(old_choices == input$seq)
+      candidate_next <- if (length(curr_idx) > 0 && curr_idx < length(old_choices)) {
+        old_choices[curr_idx + 1]
+      } else NULL
 
       showNotification("Gespeichert!", type = "message")
       # Trigger reactive re-evaluation of DB-dependent reactives
@@ -892,14 +914,14 @@ app_server <- function(input, output, session, pool) {
       }
 
       # Navigation: filtered_files statt project_data
-      current_choices <- filtered_files()
-      curr_idx <- which(current_choices == input$seq)
-
-      if(length(curr_idx) > 0 && curr_idx < length(current_choices)) {
-        next_file <- current_choices[curr_idx + 1]
-        updateSelectizeInput(session, "seq", selected = next_file)
+      # --- Navigation: bevorzugt candidate_next, sonst erstes File der neuen Liste ---
+      new_choices <- filtered_files()
+      if (!is.null(candidate_next) && candidate_next %in% new_choices) {
+        updateSelectizeInput(session, "seq", selected = candidate_next)
+      } else if (length(new_choices) > 0) {
+        updateSelectizeInput(session, "seq", selected = new_choices[1])
       } else {
-        showNotification("Letztes File erreicht!", type = "warning")
+        showNotification("Alle Schnipsel bearbeitet!", type = "warning")
       }
 
     }, error = function(e) {
