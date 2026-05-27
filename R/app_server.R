@@ -187,32 +187,31 @@ app_server <- function(input, output, session, pool) {
 
     target_id <- current_target_species()
 
-    q <- "
-      SELECT
-        og.group_id,
-        og.group_name,
-        og.target_count,
-        COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms)) AS n_hits,
-        COUNT(DISTINCT sg.spectrogram_id) AS n_total_spectrograms
-      FROM import.occupancy_groups og
-      JOIN import.spectrogram_groups sg USING (group_id)
-      JOIN import.spectrograms s        ON s.spectrogram_id = sg.spectrogram_id
-      LEFT JOIN import.annotation_status ast
-        ON ast.audio_file_id     = s.audio_file_id
-       AND ast.begin_time_ms     = s.begin_time_ms
-       AND ast.target_species_id = $2
-      LEFT JOIN import.ground_truth_annotations gt
-        ON gt.audio_file_id      = ast.audio_file_id
-       AND gt.begin_time_ms      = ast.begin_time_ms
-       AND gt.user_id            = ast.user_id
-       AND gt.species_id         = ast.target_species_id
-       AND gt.certainty_id       = 1
-       AND gt.is_present         = TRUE
-      WHERE og.project_id = $1
-      GROUP BY og.group_id, og.group_name, og.target_count
-      ORDER BY og.group_name
-    "
 
+    q <- "SELECT
+    og.group_id,
+    og.group_name,
+    og.target_count,
+    COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
+      FILTER (WHERE gt.audio_file_id IS NOT NULL) AS n_hits,
+    COUNT(DISTINCT sg.spectrogram_id) AS n_total_spectrograms
+  FROM import.occupancy_groups og
+  JOIN import.spectrogram_groups sg USING (group_id)
+  JOIN import.spectrograms s        ON s.spectrogram_id = sg.spectrogram_id
+  LEFT JOIN import.annotation_status ast
+    ON ast.audio_file_id     = s.audio_file_id
+   AND ast.begin_time_ms     = s.begin_time_ms
+   AND ast.target_species_id = $2
+  LEFT JOIN import.ground_truth_annotations gt
+    ON gt.audio_file_id      = ast.audio_file_id
+   AND gt.begin_time_ms      = ast.begin_time_ms
+   AND gt.user_id            = ast.user_id
+   AND gt.species_id         = ast.target_species_id
+   AND gt.certainty_id       = 1
+   AND gt.is_present         = TRUE
+  WHERE og.project_id = $1
+  GROUP BY og.group_id, og.group_name, og.target_count
+  ORDER BY og.group_name"
     tryCatch(
       DBI::dbGetQuery(pool, q,
                       params = list(as.integer(input$selected_project), target_id)),
@@ -405,31 +404,32 @@ app_server <- function(input, output, session, pool) {
       # its target_count of certain hits for this queue species.
       if (occupancy_active()) {
         q_done_groups <- "
-          SELECT DISTINCT CAST(s.spectrogram_id AS TEXT) || '.mp3' AS path
-          FROM import.spectrogram_groups sg
-          JOIN import.spectrograms s USING (spectrogram_id)
-          WHERE sg.group_id IN (
-            SELECT og.group_id
-            FROM import.occupancy_groups og
-            JOIN import.spectrogram_groups sg2 USING (group_id)
-            JOIN import.spectrograms s2 ON s2.spectrogram_id = sg2.spectrogram_id
-            LEFT JOIN import.annotation_status ast
-              ON ast.audio_file_id     = s2.audio_file_id
-             AND ast.begin_time_ms     = s2.begin_time_ms
-             AND ast.target_species_id = $1
-            LEFT JOIN import.ground_truth_annotations gt
-              ON gt.audio_file_id      = ast.audio_file_id
-             AND gt.begin_time_ms      = ast.begin_time_ms
-             AND gt.user_id            = ast.user_id
-             AND gt.species_id         = ast.target_species_id
-             AND gt.certainty_id       = 1
-             AND gt.is_present         = TRUE
-            WHERE og.project_id = $2
-            GROUP BY og.group_id, og.target_count
-            HAVING COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
-                   >= og.target_count
-          )
-        "
+  SELECT DISTINCT CAST(s.spectrogram_id AS TEXT) || '.mp3' AS path
+  FROM import.spectrogram_groups sg
+  JOIN import.spectrograms s USING (spectrogram_id)
+  WHERE sg.group_id IN (
+    SELECT og.group_id
+    FROM import.occupancy_groups og
+    JOIN import.spectrogram_groups sg2 USING (group_id)
+    JOIN import.spectrograms s2 ON s2.spectrogram_id = sg2.spectrogram_id
+    LEFT JOIN import.annotation_status ast
+      ON ast.audio_file_id     = s2.audio_file_id
+     AND ast.begin_time_ms     = s2.begin_time_ms
+     AND ast.target_species_id = $1
+    LEFT JOIN import.ground_truth_annotations gt
+      ON gt.audio_file_id      = ast.audio_file_id
+     AND gt.begin_time_ms      = ast.begin_time_ms
+     AND gt.user_id            = ast.user_id
+     AND gt.species_id         = ast.target_species_id
+     AND gt.certainty_id       = 1
+     AND gt.is_present         = TRUE
+    WHERE og.project_id = $2
+    GROUP BY og.group_id, og.target_count
+    HAVING COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
+             FILTER (WHERE gt.audio_file_id IS NOT NULL)
+           >= og.target_count
+  )
+"
         done_in_groups <- DBI::dbGetQuery(
           pool, q_done_groups,
           params = list(target_id, as.integer(input$selected_project))
@@ -1046,33 +1046,35 @@ app_server <- function(input, output, session, pool) {
 
         if (isTRUE(current_target_positive)) {
           q_just_done <- "
-            SELECT og.group_name, og.target_count,
-                   COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms)) AS n_hits
-            FROM import.occupancy_groups og
-            JOIN import.spectrogram_groups sg USING (group_id)
-            JOIN import.spectrograms s        ON s.spectrogram_id = sg.spectrogram_id
-            LEFT JOIN import.annotation_status ast
-              ON ast.audio_file_id     = s.audio_file_id
-             AND ast.begin_time_ms     = s.begin_time_ms
-             AND ast.target_species_id = $3
-            LEFT JOIN import.ground_truth_annotations gt
-              ON gt.audio_file_id      = ast.audio_file_id
-             AND gt.begin_time_ms      = ast.begin_time_ms
-             AND gt.user_id            = ast.user_id
-             AND gt.species_id         = ast.target_species_id
-             AND gt.certainty_id       = 1
-             AND gt.is_present         = TRUE
-            WHERE og.group_id IN (
-              SELECT sg2.group_id
-              FROM import.spectrogram_groups sg2
-              JOIN import.spectrograms s2 USING (spectrogram_id)
-              WHERE s2.audio_file_id = $1 AND s2.begin_time_ms = $2
-            )
-            GROUP BY og.group_id, og.group_name, og.target_count
-            HAVING COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms)) = og.target_count
-               AND COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
-                     FILTER (WHERE gt.audio_file_id = $1 AND gt.begin_time_ms = $2) > 0
-          "
+  SELECT og.group_name, og.target_count,
+         COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
+           FILTER (WHERE gt.audio_file_id IS NOT NULL) AS n_hits
+  FROM import.occupancy_groups og
+  JOIN import.spectrogram_groups sg USING (group_id)
+  JOIN import.spectrograms s        ON s.spectrogram_id = sg.spectrogram_id
+  LEFT JOIN import.annotation_status ast
+    ON ast.audio_file_id     = s.audio_file_id
+   AND ast.begin_time_ms     = s.begin_time_ms
+   AND ast.target_species_id = $3
+  LEFT JOIN import.ground_truth_annotations gt
+    ON gt.audio_file_id      = ast.audio_file_id
+   AND gt.begin_time_ms      = ast.begin_time_ms
+   AND gt.user_id            = ast.user_id
+   AND gt.species_id         = ast.target_species_id
+   AND gt.certainty_id       = 1
+   AND gt.is_present         = TRUE
+  WHERE og.group_id IN (
+    SELECT sg2.group_id
+    FROM import.spectrogram_groups sg2
+    JOIN import.spectrograms s2 USING (spectrogram_id)
+    WHERE s2.audio_file_id = $1 AND s2.begin_time_ms = $2
+  )
+  GROUP BY og.group_id, og.group_name, og.target_count
+  HAVING COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
+           FILTER (WHERE gt.audio_file_id IS NOT NULL) = og.target_count
+     AND COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
+           FILTER (WHERE gt.audio_file_id = $1 AND gt.begin_time_ms = $2) > 0
+"
 
           just_done <- tryCatch(
             DBI::dbGetQuery(pool, q_just_done,
