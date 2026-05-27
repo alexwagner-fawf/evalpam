@@ -390,14 +390,16 @@ app_server <- function(input, output, session, pool) {
     # always means "queue/task species" (binary OR full-with-queue).
     if (!is.null(target_id)) {
       q_done <- "
-        SELECT CAST(s.spectrogram_id AS TEXT) || '.mp3' AS path
-        FROM import.annotation_status ast
-        JOIN import.spectrograms s
-          ON ast.audio_file_id = s.audio_file_id
-         AND ast.begin_time_ms = s.begin_time_ms
-        WHERE ast.target_species_id = $1
-      "
-      done <- DBI::dbGetQuery(pool, q_done, params = list(target_id))$path
+    SELECT CAST(s.spectrogram_id AS TEXT) || '.mp3' AS path
+    FROM import.annotation_status ast
+    JOIN import.spectrograms s
+      ON ast.audio_file_id = s.audio_file_id
+     AND ast.begin_time_ms = s.begin_time_ms
+    WHERE ast.target_species_id = $1
+      AND ast.user_id <> $2
+  "
+      done <- DBI::dbGetQuery(pool, q_done,
+                              params = list(target_id, res_auth$user_id))$path
       paths <- paths[!paths %in% done]
 
       # Occupancy auto-stop: drop spectrograms whose group has already reached
@@ -429,10 +431,20 @@ app_server <- function(input, output, session, pool) {
              FILTER (WHERE gt.audio_file_id IS NOT NULL)
            >= og.target_count
   )
+  -- Keep my own annotated clips visible so I can review / correct them.
+  AND NOT EXISTS (
+    SELECT 1 FROM import.annotation_status ast_own
+    WHERE ast_own.audio_file_id     = s.audio_file_id
+      AND ast_own.begin_time_ms     = s.begin_time_ms
+      AND ast_own.target_species_id = $1
+      AND ast_own.user_id           = $3
+  )
 "
         done_in_groups <- DBI::dbGetQuery(
           pool, q_done_groups,
-          params = list(target_id, as.integer(input$selected_project))
+          params = list(target_id,
+                        as.integer(input$selected_project),
+                        res_auth$user_id)
         )$path
         paths <- paths[!paths %in% done_in_groups]
       }
@@ -447,16 +459,32 @@ app_server <- function(input, output, session, pool) {
     choices <- filtered_files()
     current <- isolate(input$seq)
 
-    selected <- if (!is.null(current) && current %in% choices) {
+    # Welche Pfade sind bereits eigene Saves? Die sollen kein Default-Auswahlziel sein.
+    my_done <- tryCatch(
+      DBI::dbGetQuery(pool,
+                      "SELECT CAST(s.spectrogram_id AS TEXT) || '.mp3' AS path
+       FROM import.annotation_status ast
+       JOIN import.spectrograms s
+         ON ast.audio_file_id = s.audio_file_id
+        AND ast.begin_time_ms = s.begin_time_ms
+       WHERE ast.user_id = $1",
+                      params = list(res_auth$user_id))$path,
+      error = function(e) character(0)
+    )
+
+    selected <- if (!is.null(current) && current %in% choices && !(current %in% my_done)) {
+      # current ist gültig UND keine eigene Bearbeitung → behalten
       current
-    } else if (length(choices) > 0) {
-      choices[1]
     } else {
-      character(0)
+      # current ist ungültig oder ein eigener Save → ersten unbearbeiteten Schnipsel wählen
+      unworked <- setdiff(choices, my_done)
+      if (length(unworked) > 0) unworked[1]
+      else if (length(choices) > 0) choices[1]
+      else character(0)
     }
 
-    updateSelectizeInput(session, "seq",
-                         choices = choices, selected = selected, server = TRUE)
+    updateSelectizeInput(session, "seq", choices = choices,
+                         selected = selected, server = TRUE)
   })
 
 
@@ -902,6 +930,19 @@ app_server <- function(input, output, session, pool) {
     selected_ids_raw <- input$inSelect
     if (mode == "binary" && !is.null(target_species_val)) {
       selected_ids <- intersect(selected_ids_raw, as.character(target_species_val))
+
+      # Binary mode silently dropped any non-target species the user ticked.
+      # Make this explicit so users don't think "I saved species X but nothing
+      # happened". For Full-mode parallel labelling, point them to switch mode.
+      discarded <- setdiff(selected_ids_raw, as.character(target_species_val))
+      if (length(discarded) > 0) {
+        showNotification(
+          paste0("Binary mode: only the target species is saved. ",
+                 length(discarded), " other selection(s) ignored. ",
+                 "Switch to Full mode to label additional species."),
+          type = "warning", duration = 6
+        )
+      }
     } else {
       selected_ids <- selected_ids_raw
     }
@@ -1017,19 +1058,12 @@ app_server <- function(input, output, session, pool) {
                             fixed_type_id, target_sid_sql))
       })
 
-      # ---- Determine the next file from the OLD list, before invalidating ----
-      # Once we trigger save_trigger, filtered_files() will recompute and
-      # potentially drop the just-saved spectrogram (and possibly its whole
-      # group). Capture the natural successor first.
-      old_choices <- filtered_files()
-      curr_idx <- which(old_choices == input$seq)
-      candidate_next <- if (length(curr_idx) > 0 && curr_idx < length(old_choices)) {
-        old_choices[curr_idx + 1]
-      } else NULL
-
       showNotification("Saved!", type = "message")
 
       # Invalidate DB-dependent reactives so counters and the queue refresh.
+      # The file-sync observer downstream will pick the next clip to navigate
+      # to \u2014 own already-annotated clips stay in the queue (for review) but
+      # are skipped as the default selection target after a save.
       save_trigger(save_trigger() + 1L)
 
       # ---- Occupancy auto-stop notification ----
@@ -1046,35 +1080,35 @@ app_server <- function(input, output, session, pool) {
 
         if (isTRUE(current_target_positive)) {
           q_just_done <- "
-  SELECT og.group_name, og.target_count,
-         COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
-           FILTER (WHERE gt.audio_file_id IS NOT NULL) AS n_hits
-  FROM import.occupancy_groups og
-  JOIN import.spectrogram_groups sg USING (group_id)
-  JOIN import.spectrograms s        ON s.spectrogram_id = sg.spectrogram_id
-  LEFT JOIN import.annotation_status ast
-    ON ast.audio_file_id     = s.audio_file_id
-   AND ast.begin_time_ms     = s.begin_time_ms
-   AND ast.target_species_id = $3
-  LEFT JOIN import.ground_truth_annotations gt
-    ON gt.audio_file_id      = ast.audio_file_id
-   AND gt.begin_time_ms      = ast.begin_time_ms
-   AND gt.user_id            = ast.user_id
-   AND gt.species_id         = ast.target_species_id
-   AND gt.certainty_id       = 1
-   AND gt.is_present         = TRUE
-  WHERE og.group_id IN (
-    SELECT sg2.group_id
-    FROM import.spectrogram_groups sg2
-    JOIN import.spectrograms s2 USING (spectrogram_id)
-    WHERE s2.audio_file_id = $1 AND s2.begin_time_ms = $2
-  )
-  GROUP BY og.group_id, og.group_name, og.target_count
-  HAVING COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
-           FILTER (WHERE gt.audio_file_id IS NOT NULL) = og.target_count
-     AND COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
-           FILTER (WHERE gt.audio_file_id = $1 AND gt.begin_time_ms = $2) > 0
-"
+            SELECT og.group_name, og.target_count,
+                   COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
+                     FILTER (WHERE gt.audio_file_id IS NOT NULL) AS n_hits
+            FROM import.occupancy_groups og
+            JOIN import.spectrogram_groups sg USING (group_id)
+            JOIN import.spectrograms s        ON s.spectrogram_id = sg.spectrogram_id
+            LEFT JOIN import.annotation_status ast
+              ON ast.audio_file_id     = s.audio_file_id
+             AND ast.begin_time_ms     = s.begin_time_ms
+             AND ast.target_species_id = $3
+            LEFT JOIN import.ground_truth_annotations gt
+              ON gt.audio_file_id      = ast.audio_file_id
+             AND gt.begin_time_ms      = ast.begin_time_ms
+             AND gt.user_id            = ast.user_id
+             AND gt.species_id         = ast.target_species_id
+             AND gt.certainty_id       = 1
+             AND gt.is_present         = TRUE
+            WHERE og.group_id IN (
+              SELECT sg2.group_id
+              FROM import.spectrogram_groups sg2
+              JOIN import.spectrograms s2 USING (spectrogram_id)
+              WHERE s2.audio_file_id = $1 AND s2.begin_time_ms = $2
+            )
+            GROUP BY og.group_id, og.group_name, og.target_count
+            HAVING COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
+                     FILTER (WHERE gt.audio_file_id IS NOT NULL) = og.target_count
+               AND COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
+                     FILTER (WHERE gt.audio_file_id = $1 AND gt.begin_time_ms = $2) > 0
+          "
 
           just_done <- tryCatch(
             DBI::dbGetQuery(pool, q_just_done,
@@ -1096,24 +1130,19 @@ app_server <- function(input, output, session, pool) {
         }
       }
 
-      # ---- Navigate ----
-      # Prefer the candidate_next captured before invalidation; if it's no
-      # longer in the new list (e.g. its group just closed), jump to the
-      # first remaining clip; if the list is empty, announce we're done.
-      new_choices <- filtered_files()
-      if (!is.null(candidate_next) && candidate_next %in% new_choices) {
-        updateSelectizeInput(session, "seq", selected = candidate_next)
-      } else if (length(new_choices) > 0) {
-        updateSelectizeInput(session, "seq", selected = new_choices[1])
-      } else {
-        showNotification("All clips processed!", type = "warning")
-      }
-
     }, error = function(e) {
-      print("!!! DB ERROR !!!")
-      print(e)
-      showNotification(paste("Save error:", e$message),
-                       type = "error", duration = NULL)
+      err_msg <- conditionMessage(e)
+      if (grepl("Mode-Konflikt", err_msg)) {
+        showNotification(
+          "This clip was already annotated in a different mode (Full vs. Binary). Delete the previous annotation first if you want to switch modes for this clip.",
+          type = "error", duration = 10
+        )
+      } else {
+        print("!!! DB ERROR !!!")
+        print(e)
+        showNotification(paste("Save error:", err_msg),
+                         type = "error", duration = NULL)
+      }
     })
   })
 
