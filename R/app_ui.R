@@ -66,7 +66,7 @@ app_ui <- function(request) {
             right = TRUE
           ),
           uiOutput("occupancy_info_ui"),
-          numericInput("score_start", "Scores anzeigen ab / Show scores from:",
+          numericInput("score_start", "Scores anzeigen bis / Show scores up to:",
                        value = 1.0, min = 0, max = 1, step = 0.05),
           selectizeInput("seq", "Sequenz / File:", choices = character(0), options = list(maxOptions = 10000)),
 
