@@ -4,7 +4,7 @@ plot01_ids <- DBI::dbGetQuery(pool,
    JOIN import.deployments d USING (deployment_id)
    WHERE d.deployment_name = 'Plot_01'")$audio_file_id
 
-create_occupancy_group(pool, project_id = 1,
+group_from_audio_files(pool, project_id = 1,
                        group_name = "Plot_01",
                        target_count = 3L,
                        audio_file_ids = plot01_ids)
@@ -16,7 +16,7 @@ plot01_morning_ids <- DBI::dbGetQuery(pool,
    WHERE d.deployment_name = 'Plot_01'
      AND EXTRACT(HOUR FROM af.timestamp_start) BETWEEN 4 AND 6")$audio_file_id
 
-create_occupancy_group(pool, project_id = 1,
+group_from_audio_files(pool, project_id = 1,
                        group_name = "Plot_01_Morgens",
                        target_count = 3L,
                        audio_file_ids = plot01_morning_ids)
