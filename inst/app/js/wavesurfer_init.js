@@ -1,4 +1,20 @@
-console.log('[evalpam] wavesurfer_init loaded — v71 — ' + new Date().toISOString());
+console.log('[evalpam] wavesurfer_init loaded — v72 — ' + new Date().toISOString());
+
+// Safari < 15 (and 15.5–18.1 partially) lack createImageBitmap, which makes
+// the vendored spectrogram plugin's drawSpectrogram() throw synchronously.
+// That throw is swallowed by the unawaited render call chain in
+// wavesurfer.esm.js, so 'ready' still fires and audio still plays — only the
+// canvas pixels never get painted. Polyfill just the (ImageData, sx, sy, sw, sh)
+// signature the plugin uses; a plain <canvas> works as a drawImage() source.
+if (typeof window.createImageBitmap !== 'function') {
+  window.createImageBitmap = function (imageData, sx = 0, sy = 0, sw = imageData.width, sh = imageData.height) {
+    const c = document.createElement('canvas');
+    c.width = sw;
+    c.height = sh;
+    c.getContext('2d').putImageData(imageData, -sx, -sy);
+    return Promise.resolve(c);
+  };
+}
 
 // Dynamic imports so this file can be loaded as a plain <script> by
 // bundle_resources() without triggering "import only at top level of module".
