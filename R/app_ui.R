@@ -58,7 +58,15 @@ app_ui <- function(request) {
           uiOutput("project_selector_ui"),
           uiOutput("target_species_ui"),
           uiOutput("mode_info_ui"),
-          numericInput("score_start", "Scores anzeigen ab / Show scores from:",
+          shinyWidgets::materialSwitch(
+            inputId = "use_occupancy_filter",
+            label = "Occupancy-Auto-Stopp",
+            value = TRUE,
+            status = "primary",
+            right = TRUE
+          ),
+          uiOutput("occupancy_info_ui"),
+          numericInput("score_start", "Scores anzeigen bis / Show scores up to:",
                        value = 1.0, min = 0, max = 1, step = 0.05),
           selectizeInput("seq", "Sequenz / File:", choices = character(0), options = list(maxOptions = 10000)),
 
@@ -86,6 +94,16 @@ app_ui <- function(request) {
             )
           ),
 
+
+          hr(),
+          selectizeInput(
+            inputId = "abiotic_sounds",
+            label = "Hintergrundgeräusche (Abiotic Sounds):",
+            choices = NULL, # Wird dynamisch vom Server befüllt
+            multiple = TRUE,
+            width = "100%",
+            options = list(placeholder = "Wird geladen / Loading...")
+          ),
           hr(),
 
           # 2. Dynamische Verhaltens-Liste (NEU)
