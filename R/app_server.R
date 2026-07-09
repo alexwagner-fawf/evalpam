@@ -77,16 +77,19 @@ app_server <- function(input, output, session, pool) {
   # These never change at runtime; wrapping them in reactive() is fine because
   # they will be cached after the first call.
   behavior_list <- reactive({
+    req(res_auth$user_id)
     DBI::dbGetQuery(pool,
                     "SELECT behavior_id, behavior_long_de, behavior_long_en
        FROM public.lut_behavior_code ORDER BY behavior_id")
   })
   certainty_list <- reactive({
+    req(res_auth$user_id)
     DBI::dbGetQuery(pool,
                     "SELECT certainty_id, certainty_long_de, certainty_long_en
        FROM public.lut_certainty_code ORDER BY certainty_id")
   })
   abiotic_list <- reactive({
+    req(res_auth$user_id)
     DBI::dbGetQuery(pool,
                     "SELECT abiotic_sound_id, abiotic_sound_long_de, abiotic_sound_long_en
        FROM public.lut_abiotic_sound_code ORDER BY abiotic_sound_id")
