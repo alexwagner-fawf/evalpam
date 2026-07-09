@@ -325,43 +325,26 @@ app_server <- function(input, output, session, pool) {
 
 
   # ---- 5. Load project data ----
-  # Pulls everything the UI needs in one query: detections, spectrogram paths,
-  # audio/deployment metadata. Sorted by (species, score desc) so the queue
-  # for any chosen species starts with its highest-confidence detections.
+  # Lightweight queue index: only the three columns needed to build, filter,
+  # and sort the spectrogram queue. Full clip metadata is fetched on demand
+  # by clip_detail() for just the current and next spectrogram.
   project_data <- reactive({
     req(input$selected_project)
 
     query <- "
       SELECT
-        r.result_id,
-        r.confidence AS score,
-        CAST(r.begin_time_ms AS FLOAT) / 1000.0 AS start,
-        CAST(r.end_time_ms   AS FLOAT) / 1000.0 AS end_sec,
         CAST(s.spectrogram_id AS TEXT) || '.mp3' AS path,
-        s.buffer_ms,
-        af.audio_file_id,
-        af.sample_rate,
-        af.required_annotation_type_id,
-        lt.annotation_type_description,
-        sp.species_id,
-        sp.species_short,
-        sp.species_long_de,
-        sp.species_long_en,
-        sp.species_scientific,
-        d.deployment_name
+        r.species_id,
+        r.confidence AS score
       FROM import.results r
-      JOIN import.spectrograms s     ON r.result_id = s.result_id
-      JOIN import.audio_files af     ON r.audio_file_id = af.audio_file_id
-      JOIN import.deployments d      ON af.deployment_id = d.deployment_id
-      JOIN public.lut_species_code sp ON r.species_id = sp.species_id
-      LEFT JOIN public.lut_annotation_type_code lt
-        ON af.required_annotation_type_id = lt.annotation_type_id
+      JOIN import.spectrograms s ON r.result_id = s.result_id
+      JOIN import.audio_files af ON r.audio_file_id = af.audio_file_id
+      JOIN import.deployments d  ON af.deployment_id = d.deployment_id
       WHERE d.project_id = $1
       ORDER BY af.relative_path, r.begin_time_ms
     "
-    result <- DBI::dbGetQuery(pool, query, params = list(input$selected_project))
-
-    result |> dplyr::arrange(species_id, desc(score))
+    DBI::dbGetQuery(pool, query, params = list(input$selected_project)) |>
+      dplyr::arrange(species_id, dplyr::desc(score))
   })
 
   # ---- Filtered file list (the queue) ----
@@ -456,6 +439,50 @@ app_server <- function(input, output, session, pool) {
     paths
   })
 
+  # Full metadata for the current spectrogram and the one immediately after it
+  # in the filtered queue. Keeping the window to two rows means the heavy JOINs
+  # (audio_files, deployments, lut_species_code, lut_annotation_type_code) only
+  # touch a tiny slice of the table regardless of project size.
+  clip_detail <- reactive({
+    req(input$selected_project, input$seq)
+    queue    <- filtered_files()
+    cur_path <- input$seq
+    idx      <- match(cur_path, queue)
+    nxt_path <- if (!is.na(idx) && idx < length(queue)) queue[[idx + 1L]] else cur_path
+
+    DBI::dbGetQuery(pool, "
+      SELECT
+        r.result_id,
+        r.confidence AS score,
+        CAST(r.begin_time_ms AS FLOAT) / 1000.0 AS start,
+        CAST(r.end_time_ms   AS FLOAT) / 1000.0 AS end_sec,
+        CAST(s.spectrogram_id AS TEXT) || '.mp3' AS path,
+        s.buffer_ms,
+        af.audio_file_id,
+        af.sample_rate,
+        af.required_annotation_type_id,
+        lt.annotation_type_description,
+        sp.species_id,
+        sp.species_short,
+        sp.species_long_de,
+        sp.species_long_en,
+        sp.species_scientific,
+        d.deployment_name
+      FROM import.results r
+      JOIN import.spectrograms s      ON r.result_id = s.result_id
+      JOIN import.audio_files af      ON r.audio_file_id = af.audio_file_id
+      JOIN import.deployments d       ON af.deployment_id = d.deployment_id
+      JOIN public.lut_species_code sp ON r.species_id = sp.species_id
+      LEFT JOIN public.lut_annotation_type_code lt
+        ON af.required_annotation_type_id = lt.annotation_type_id
+      WHERE d.project_id = $1
+        AND (CAST(s.spectrogram_id AS TEXT) || '.mp3' = $2
+          OR CAST(s.spectrogram_id AS TEXT) || '.mp3' = $3)
+      ORDER BY af.relative_path, r.begin_time_ms
+    ", params = list(input$selected_project, cur_path, nxt_path)) |>
+      dplyr::arrange(species_id, dplyr::desc(score))
+  })
+
   # Sync the selectizeInput with the current filtered list. Keeps the current
   # selection if it's still in the list; otherwise jumps to the first entry.
   observe({
@@ -493,8 +520,8 @@ app_server <- function(input, output, session, pool) {
 
   # ---- 6. Current file row(s) ----
   current_file_df <- reactive({
-    req(input$seq, project_data())
-    project_data() |>
+    req(input$seq, clip_detail())
+    clip_detail() |>
       dplyr::filter(path == input$seq) |>
       dplyr::arrange(desc(score))
   })
@@ -510,7 +537,7 @@ app_server <- function(input, output, session, pool) {
   # Shared by the two observers below (seq change vs. freq change) so the
   # load logic isn't duplicated.
   do_ws_load <- function(seq_val, fmax, fmin) {
-    row_data <- project_data() |> dplyr::filter(path == seq_val)
+    row_data <- clip_detail() |> dplyr::filter(path == seq_val)
     if (nrow(row_data) == 0) return(invisible(NULL))
 
     buffer_val     <- row_data$buffer_ms[1] #/ 1000   # ms -> s?
@@ -562,7 +589,7 @@ app_server <- function(input, output, session, pool) {
   # Recording changed -> load immediately. isolate() on the freq values keeps
   # this observer from re-firing when the debounced freq reactives settle.
   observeEvent(input$seq, {
-    req(input$seq, project_data())
+    req(input$seq, clip_detail())
     do_ws_load(input$seq, isolate(freq_max_d()), isolate(freq_min_d()))
     updateSelectizeInput(session, "abiotic_sounds", selected = character(0))
   })
@@ -572,7 +599,7 @@ app_server <- function(input, output, session, pool) {
   # reactives compute their initial values right when input$seq's observer
   # is already loading the first file.
   observeEvent(list(freq_max_d(), freq_min_d()), {
-    req(input$seq, project_data())
+    req(input$seq, clip_detail())
     do_ws_load(input$seq, freq_max_d(), freq_min_d())
   }, ignoreInit = TRUE)
 
@@ -641,9 +668,9 @@ app_server <- function(input, output, session, pool) {
   # save by the current user (edit mode) or, on first visit, from the BirdNET
   # detections in that clip. The status query is scoped by queue context.
   observeEvent(input$seq, {
-    req(input$seq, project_data(), res_auth$user_id)
+    req(input$seq, clip_detail(), res_auth$user_id)
 
-    current_file_info <- project_data() |> dplyr::filter(path == input$seq)
+    current_file_info <- clip_detail() |> dplyr::filter(path == input$seq)
     if (nrow(current_file_info) == 0) return()
 
     aid       <- current_file_info$audio_file_id[1]
@@ -756,7 +783,7 @@ app_server <- function(input, output, session, pool) {
     cert_choices <- setNames(df_cert$certainty_id, cert_labels)
 
     # Fetch existing annotations for this user + this exact spectrogram (time-scoped)
-    aid_query <- project_data() |> dplyr::filter(path == input$seq)
+    aid_query <- clip_detail() |> dplyr::filter(path == input$seq)
     saved_behaviors <- data.frame(species_id  = integer(),
                                   behavior_id = integer(),
                                   certainty_id = integer())
@@ -837,8 +864,8 @@ app_server <- function(input, output, session, pool) {
   # user, or fresh. Locking is per queue task: the same spectrogram can be
   # locked for one target species while being free for another.
   observe({
-    req(input$seq, project_data(), res_auth$user_id)
-    current_row <- project_data() |> dplyr::filter(path == input$seq)
+    req(input$seq, clip_detail(), res_auth$user_id)
+    current_row <- clip_detail() |> dplyr::filter(path == input$seq)
     if (nrow(current_row) == 0) return()
 
     aid       <- current_row$audio_file_id[1]
