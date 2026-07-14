@@ -56,30 +56,37 @@ if (nrow(samples) == 0) {
        "(run inst/02_inference.R first).")
 }
 
-samples_group <- samples |>
+# Deduplicate to one row per time window before generating audio clips.
+# sample_results_table() samples per (species_id, deployment_id), so the same
+# (audio_file_id, begin_time_ms) may appear for multiple species. Each window
+# needs exactly one audio clip; keep the highest-confidence detection as the
+# representative row (result_id on the spectrogram is provenance only).
+samples_dedup <- samples |>
   dplyr::arrange(dplyr::desc(confidence)) |>
-  dplyr::group_by(deployment_id, species_id) |>
+  dplyr::distinct(audio_file_id, begin_time_ms, .keep_all = TRUE)
+
+samples_group <- samples_dedup |>
+  dplyr::group_by(deployment_id) |>
   dplyr::group_split()
 
 message(sprintf(
-  "Generating spectrograms for %d group(s) across %d deployment(s).",
-  length(samples_group), dplyr::n_distinct(samples$deployment_id)
+  "Generating %d unique clip(s) across %d deployment(s) (%d total detections sampled).",
+  nrow(samples_dedup), dplyr::n_distinct(samples_dedup$deployment_id), nrow(samples)
 ))
 
 for (sample_i in seq_along(samples_group)) {
-  message(sprintf("[%d/%d] deployment=%s species=%s",
+  message(sprintf("[%d/%d] deployment=%s  %d clip(s)",
                   sample_i, length(samples_group),
                   samples_group[[sample_i]]$deployment_id[1],
-                  samples_group[[sample_i]]$species_id[1]))
+                  nrow(samples_group[[sample_i]])))
 
   evalpam::build_audio_clips_db(
-    data          = samples_group[[sample_i]] |> dplyr::arrange(dplyr::desc(confidence)),
-    pool          = pool,
-    padding_s     = padding_s,
-    output_dir    = output_dir,
-    export_to_db  = export_to_db,
-    generate_image = generate_image,
-    verbose       = FALSE
+    data         = samples_group[[sample_i]],
+    pool         = pool,
+    padding_s    = padding_s,
+    output_dir   = output_dir,
+    export_to_db = export_to_db,
+    verbose      = FALSE
   )
 }
 

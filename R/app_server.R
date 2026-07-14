@@ -337,8 +337,9 @@ app_server <- function(input, output, session, pool) {
         r.species_id,
         r.confidence AS score
       FROM import.results r
-      JOIN import.spectrograms s ON r.result_id = s.result_id
-      JOIN import.audio_files af ON r.audio_file_id = af.audio_file_id
+      JOIN import.audio_files af ON af.audio_file_id = r.audio_file_id
+      JOIN import.spectrograms s ON s.audio_file_id = r.audio_file_id
+                                AND s.begin_time_ms = r.begin_time_ms
       JOIN import.deployments d  ON af.deployment_id = d.deployment_id
       WHERE d.project_id = $1
       ORDER BY af.relative_path, r.begin_time_ms
@@ -469,8 +470,9 @@ app_server <- function(input, output, session, pool) {
         sp.species_scientific,
         d.deployment_name
       FROM import.results r
-      JOIN import.spectrograms s      ON r.result_id = s.result_id
-      JOIN import.audio_files af      ON r.audio_file_id = af.audio_file_id
+      JOIN import.audio_files af      ON af.audio_file_id = r.audio_file_id
+      JOIN import.spectrograms s      ON s.audio_file_id = r.audio_file_id
+                                      AND s.begin_time_ms = r.begin_time_ms
       JOIN import.deployments d       ON af.deployment_id = d.deployment_id
       JOIN public.lut_species_code sp ON r.species_id = sp.species_id
       LEFT JOIN public.lut_annotation_type_code lt
