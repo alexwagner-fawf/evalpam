@@ -1,13 +1,8 @@
-# test-apply_birdnet_model.R
+# test-fct_run_birdnet.R
 #
 # Tests for apply_birdnet_model() and its internal helpers:
 #   .retry_file_check(), .retry_inference(), .backoff_sleep(),
 #   .birdnet_error_result()
-#
-# Run with:
-#   testthat::test_file("tests/testthat/test-apply_birdnet_model.R")
-# or from the package root:
-#   devtools::test(filter = "apply_birdnet_model")
 #
 # HOW STUBBING WORKS HERE
 # -----------------------
@@ -16,18 +11,25 @@
 #   what  = the name of the call to intercept, as seen inside `where`
 #   how   = replacement value / function
 #
-# Because the helpers are internal (".retry_file_check", ".retry_inference",
-# ".backoff_sleep"), stubs must target THOSE functions directly, not the
-# top-level apply_birdnet_model() wrapper.  Each test_that() block gets its
-# own fresh stubs (mockery resets after each block automatically).
+# KEY RULE: the stub is assigned to the *test frame*, not the package namespace.
+# That means:
+#   - stub(apply_birdnet_model, ".retry_inference", fn)  → works because
+#     apply_birdnet_model is the function called directly in the test
+#   - stub(.retry_inference, ".predict_birdnet", fn) → works when
+#     .retry_inference is called directly in the test; does NOT work when
+#     apply_birdnet_model calls .retry_inference through the namespace
+#
+# Design consequence:
+#   • Tests about *apply_birdnet_model integration*: stub .retry_inference /
+#     .retry_file_check directly FROM apply_birdnet_model.
+#   • Tests about *.retry_inference retry logic*: call .retry_inference()
+#     directly so the stub on .predict_birdnet is visible.
+#   • Tests about *.retry_file_check retry logic*: call .retry_file_check()
+#     directly so stubs on file.exists / file.info / file.access are visible.
 # ---------------------------------------------------------------------------
 
 library(testthat)
 library(mockery)
-
-# Source the implementation when running outside a package.
-# Comment out when running via devtools::test().
-# source("birdnet_robust.R")
 
 # ===========================================================================
 # Shared fixtures
@@ -56,6 +58,20 @@ make_prediction <- function() {
     label   = c("Turdus merula_Blackbird", "Parus major_Great Tit"),
     score   = c(0.91, 0.76),
     stringsAsFactors = FALSE
+  )
+}
+
+# Default inference params (mirrors apply_birdnet_model's built-in defaults)
+make_params <- function() {
+  list(
+    min_confidence      = 0.2,
+    chunk_overlap_s     = 0,
+    use_bandpass        = TRUE,
+    bandpass_fmin       = 150L,
+    bandpass_fmax       = 15000L,
+    apply_sigmoid       = TRUE,
+    sigmoid_sensitivity = 1,
+    keep_empty          = FALSE
   )
 }
 
@@ -105,7 +121,7 @@ test_that("stops when retry_wait_s is invalid", {
 
 
 # ===========================================================================
-# 2. Successful inference
+# 2. Successful inference  (stub .retry_inference from apply_birdnet_model)
 # ===========================================================================
 
 test_that("returns correct structure on success", {
@@ -114,12 +130,11 @@ test_that("returns correct structure on success", {
   tmp   <- make_tmp_wav()
   on.exit(unlink(tmp), add = TRUE)
 
-  # Stub the birdnetR call INSIDE .retry_inference (not at top level)
-  stub(.retry_inference,
-       "birdnetR::predict_species_from_audio_file",
-       function(...) pred)
+  stub(apply_birdnet_model, ".retry_inference", function(...) pred)
 
-  res <- apply_birdnet_model(audio_file = tmp, birdnet_setup = setup, retry_n = 0, retry_wait_s = 0)
+  res <- suppressMessages(
+    apply_birdnet_model(audio_file = tmp, birdnet_setup = setup, retry_n = 0, retry_wait_s = 0)
+  )
 
   expect_null(res$error)
   expect_identical(res$prediction_raw, pred)
@@ -135,14 +150,14 @@ test_that("custom birdnet_params override defaults and are stored", {
   tmp   <- make_tmp_wav()
   on.exit(unlink(tmp), add = TRUE)
 
-  stub(.retry_inference,
-       "birdnetR::predict_species_from_audio_file",
-       function(...) pred)
+  stub(apply_birdnet_model, ".retry_inference", function(...) pred)
 
-  res <- apply_birdnet_model(tmp, setup,
-                             birdnet_params = list(min_confidence = 0.5,
-                                                   use_bandpass   = FALSE),
-                             retry_n = 0, retry_wait_s = 0)
+  res <- suppressMessages(
+    apply_birdnet_model(tmp, setup,
+                        birdnet_params = list(min_confidence = 0.5,
+                                              use_bandpass   = FALSE),
+                        retry_n = 0, retry_wait_s = 0)
+  )
 
   expect_equal(res$params$min_confidence, 0.5)
   expect_false(res$params$use_bandpass)
@@ -155,9 +170,7 @@ test_that("default params message is emitted for missing keys", {
   tmp   <- make_tmp_wav()
   on.exit(unlink(tmp), add = TRUE)
 
-  stub(.retry_inference,
-       "birdnetR::predict_species_from_audio_file",
-       function(...) pred)
+  stub(apply_birdnet_model, ".retry_inference", function(...) pred)
 
   expect_message(
     apply_birdnet_model(tmp, setup, retry_n = 0, retry_wait_s = 0),
@@ -194,17 +207,14 @@ test_that("emits a warning on file_not_found", {
 
 
 # ===========================================================================
-# 4. File-not-found with retries (flaky network simulation)
+# 4. File-not-found with retries (.retry_file_check called directly)
 # ===========================================================================
 
 test_that("retries on file_not_found and succeeds when file appears later", {
-  setup       <- make_setup()
-  pred        <- make_prediction()
-  tmp         <- tempfile(fileext = ".wav")   # does NOT exist yet
+  tmp         <- tempfile(fileext = ".wav")
   check_count <- 0L
   on.exit(unlink(tmp), add = TRUE)
 
-  # Stub file.exists INSIDE .retry_file_check
   stub(.retry_file_check, "file.exists", function(path) {
     check_count <<- check_count + 1L
     if (check_count < 3L) return(FALSE)
@@ -213,14 +223,9 @@ test_that("retries on file_not_found and succeeds when file appears later", {
   })
   stub(.retry_file_check, "Sys.sleep", function(...) invisible(NULL))
 
-  stub(.retry_inference,
-       "birdnetR::predict_species_from_audio_file",
-       function(...) pred)
+  result <- .retry_file_check(tmp, retry_n = 3L, retry_wait_s = 0)
 
-  res <- apply_birdnet_model(tmp, setup, retry_n = 3L, retry_wait_s = 0)
-
-  expect_null(res$error)
-  expect_identical(res$prediction_raw, pred)
+  expect_null(result$error_type)
   expect_gte(check_count, 3L)
 })
 
@@ -275,14 +280,12 @@ test_that("returns empty_file error without retry when retry_n = 0", {
 })
 
 test_that("retries on empty_file and succeeds when content is written later", {
-  setup      <- make_setup()
-  pred       <- make_prediction()
   tmp        <- tempfile(fileext = ".wav")
   info_count <- 0L
   file.create(tmp)   # start empty
   on.exit(unlink(tmp), add = TRUE)
 
-  # Stub file.info INSIDE .retry_file_check so we control when size becomes > 0
+  # Call .retry_file_check directly so the file.info stub is visible.
   stub(.retry_file_check, "file.info", function(path, ...) {
     info_count <<- info_count + 1L
     if (info_count >= 2L) writeBin(as.raw(rep(0x01, 100)), path)
@@ -290,45 +293,36 @@ test_that("retries on empty_file and succeeds when content is written later", {
   })
   stub(.retry_file_check, "Sys.sleep", function(...) invisible(NULL))
 
-  stub(.retry_inference,
-       "birdnetR::predict_species_from_audio_file",
-       function(...) pred)
+  result <- .retry_file_check(tmp, retry_n = 3L, retry_wait_s = 0)
 
-  res <- apply_birdnet_model(tmp, setup, retry_n = 3L, retry_wait_s = 0)
-
-  expect_null(res$error)
-  expect_identical(res$prediction_raw, pred)
+  expect_null(result$error_type)
 })
 
 
 # ===========================================================================
-# 6. Permission denied (no retry expected)
+# 6. Permission denied (.retry_file_check called directly)
 # ===========================================================================
 
 test_that("returns permission_denied immediately without retrying", {
-  setup       <- make_setup()
   tmp         <- make_tmp_wav()
   sleep_calls <- 0L
   on.exit(unlink(tmp), add = TRUE)
 
-  # file.exists will return TRUE (real file exists); deny read via file.access
+  # Call .retry_file_check directly so the file.access stub is visible.
   stub(.retry_file_check, "file.access", function(names, mode = 0L) -1L)
   stub(.retry_file_check, "Sys.sleep",   function(...) {
     sleep_calls <<- sleep_calls + 1L
   })
 
-  res <- mute_warnings(
-    apply_birdnet_model(tmp, setup, retry_n = 3L, retry_wait_s = 0)
-  )
+  result <- .retry_file_check(tmp, retry_n = 3L, retry_wait_s = 0)
 
-  expect_null(res$prediction_raw)
-  expect_equal(res$error$type, "permission_denied")
+  expect_equal(result$error_type, "permission_denied")
   expect_equal(sleep_calls, 0L)   # structural – must never retry
 })
 
 
 # ===========================================================================
-# 7. Corrupt file (inference error – no retry)
+# 7. Corrupt file (.retry_inference called directly)
 # ===========================================================================
 
 test_that("returns corrupt_file error without retrying", {
@@ -337,19 +331,19 @@ test_that("returns corrupt_file error without retrying", {
   sleep_calls <- 0L
   on.exit(unlink(tmp), add = TRUE)
 
-  stub(.retry_inference,
-       "birdnetR::predict_species_from_audio_file",
+  stub(.retry_inference, ".predict_birdnet",
        function(...) stop("invalid audio header: corrupt data"))
   stub(.retry_inference, "Sys.sleep", function(...) {
     sleep_calls <<- sleep_calls + 1L
   })
 
-  res <- mute_warnings(
-    apply_birdnet_model(tmp, setup, retry_n = 3L, retry_wait_s = 0)
+  result <- suppressWarnings(
+    .retry_inference(tmp, setup, make_params(), 1L, FALSE,
+                     retry_n = 3L, retry_wait_s = 0)
   )
 
-  expect_null(res$prediction_raw)
-  expect_equal(res$error$type, "corrupt_file")
+  expect_s3_class(result, "birdnet_inference_error")
+  expect_equal(result$error_type, "corrupt_file")
   expect_equal(sleep_calls, 0L)   # must not retry corrupt files
 })
 
@@ -358,20 +352,20 @@ test_that("corrupt_file error message is preserved in result", {
   tmp   <- make_tmp_wav()
   on.exit(unlink(tmp), add = TRUE)
 
-  stub(.retry_inference,
-       "birdnetR::predict_species_from_audio_file",
+  stub(.retry_inference, ".predict_birdnet",
        function(...) stop("codec: unsupported format XYZ"))
 
-  res <- mute_warnings(
-    apply_birdnet_model(tmp, setup, retry_n = 0, retry_wait_s = 0)
+  result <- suppressWarnings(
+    .retry_inference(tmp, setup, make_params(), 1L, FALSE,
+                     retry_n = 0L, retry_wait_s = 0)
   )
 
-  expect_match(res$error$message, "unsupported format XYZ")
+  expect_match(result$message, "unsupported format XYZ")
 })
 
 
 # ===========================================================================
-# 8. Transient inference / network error (retried)
+# 8. Transient inference / network error (.retry_inference called directly)
 # ===========================================================================
 
 test_that("retries on transient_io_error and eventually succeeds", {
@@ -381,19 +375,20 @@ test_that("retries on transient_io_error and eventually succeeds", {
   call_count <- 0L
   on.exit(unlink(tmp), add = TRUE)
 
-  stub(.retry_inference,
-       "birdnetR::predict_species_from_audio_file",
-       function(...) {
-         call_count <<- call_count + 1L
-         if (call_count < 3L) stop("network connection reset by peer")
-         pred
-       })
+  stub(.retry_inference, ".predict_birdnet", function(...) {
+    call_count <<- call_count + 1L
+    if (call_count < 3L) stop("network connection reset by peer")
+    pred
+  })
   stub(.retry_inference, "Sys.sleep", function(...) invisible(NULL))
 
-  res <- apply_birdnet_model(tmp, setup, retry_n = 3L, retry_wait_s = 0)
+  result <- suppressMessages(
+    .retry_inference(tmp, setup, make_params(), 1L, FALSE,
+                     retry_n = 3L, retry_wait_s = 0)
+  )
 
-  expect_null(res$error)
-  expect_identical(res$prediction_raw, pred)
+  expect_false(inherits(result, "birdnet_inference_error"))
+  expect_identical(result, pred)
   expect_equal(call_count, 3L)
 })
 
@@ -402,18 +397,18 @@ test_that("exhausts retries and returns transient_io_error", {
   tmp   <- make_tmp_wav()
   on.exit(unlink(tmp), add = TRUE)
 
-  stub(.retry_inference,
-       "birdnetR::predict_species_from_audio_file",
+  stub(.retry_inference, ".predict_birdnet",
        function(...) stop("NFS stale file handle"))
   stub(.retry_inference, "Sys.sleep", function(...) invisible(NULL))
 
-  res <- mute_warnings(
-    apply_birdnet_model(tmp, setup, retry_n = 2L, retry_wait_s = 0)
-  )
+  result <- suppressMessages(suppressWarnings(
+    .retry_inference(tmp, setup, make_params(), 1L, FALSE,
+                     retry_n = 2L, retry_wait_s = 0)
+  ))
 
-  expect_null(res$prediction_raw)
-  expect_equal(res$error$type, "transient_io_error")
-  expect_match(res$error$message, "stale file handle")
+  expect_s3_class(result, "birdnet_inference_error")
+  expect_equal(result$error_type, "transient_io_error")
+  expect_match(result$message, "stale file handle")
 })
 
 test_that("correct number of inference calls made during retries", {
@@ -422,24 +417,23 @@ test_that("correct number of inference calls made during retries", {
   call_count <- 0L
   on.exit(unlink(tmp), add = TRUE)
 
-  stub(.retry_inference,
-       "birdnetR::predict_species_from_audio_file",
-       function(...) {
-         call_count <<- call_count + 1L
-         stop("connection timeout")
-       })
+  stub(.retry_inference, ".predict_birdnet", function(...) {
+    call_count <<- call_count + 1L
+    stop("connection timeout")
+  })
   stub(.retry_inference, "Sys.sleep", function(...) invisible(NULL))
 
-  mute_warnings(
-    apply_birdnet_model(tmp, setup, retry_n = 3L, retry_wait_s = 0)
-  )
+  suppressMessages(suppressWarnings(
+    .retry_inference(tmp, setup, make_params(), 1L, FALSE,
+                     retry_n = 3L, retry_wait_s = 0)
+  ))
 
   expect_equal(call_count, 4L)   # 1 initial + 3 retries
 })
 
 
 # ===========================================================================
-# 9. Generic (unclassified) inference error
+# 9. Generic (unclassified) inference error (.retry_inference called directly)
 # ===========================================================================
 
 test_that("returns inference_error for unknown error messages", {
@@ -447,17 +441,17 @@ test_that("returns inference_error for unknown error messages", {
   tmp   <- make_tmp_wav()
   on.exit(unlink(tmp), add = TRUE)
 
-  stub(.retry_inference,
-       "birdnetR::predict_species_from_audio_file",
+  stub(.retry_inference, ".predict_birdnet",
        function(...) stop("something entirely unexpected happened"))
   stub(.retry_inference, "Sys.sleep", function(...) invisible(NULL))
 
-  res <- mute_warnings(
-    apply_birdnet_model(tmp, setup, retry_n = 0, retry_wait_s = 0)
-  )
+  result <- suppressMessages(suppressWarnings(
+    .retry_inference(tmp, setup, make_params(), 1L, FALSE,
+                     retry_n = 0L, retry_wait_s = 0)
+  ))
 
-  expect_null(res$prediction_raw)
-  expect_equal(res$error$type, "inference_error")
+  expect_s3_class(result, "birdnet_inference_error")
+  expect_equal(result$error_type, "inference_error")
 })
 
 test_that("unknown inference errors ARE retried (up to retry_n times)", {
@@ -466,24 +460,23 @@ test_that("unknown inference errors ARE retried (up to retry_n times)", {
   call_count <- 0L
   on.exit(unlink(tmp), add = TRUE)
 
-  stub(.retry_inference,
-       "birdnetR::predict_species_from_audio_file",
-       function(...) {
-         call_count <<- call_count + 1L
-         stop("something entirely unexpected happened")
-       })
+  stub(.retry_inference, ".predict_birdnet", function(...) {
+    call_count <<- call_count + 1L
+    stop("something entirely unexpected happened")
+  })
   stub(.retry_inference, "Sys.sleep", function(...) invisible(NULL))
 
-  mute_warnings(
-    apply_birdnet_model(tmp, setup, retry_n = 2L, retry_wait_s = 0)
-  )
+  suppressMessages(suppressWarnings(
+    .retry_inference(tmp, setup, make_params(), 1L, FALSE,
+                     retry_n = 2L, retry_wait_s = 0)
+  ))
 
   expect_equal(call_count, 3L)   # 1 initial + 2 retries
 })
 
 
 # ===========================================================================
-# 10. Inference warning propagation
+# 10. Inference warning propagation (.retry_inference called directly)
 # ===========================================================================
 
 test_that("inference warnings are re-emitted with file context", {
@@ -492,15 +485,14 @@ test_that("inference warnings are re-emitted with file context", {
   tmp   <- make_tmp_wav()
   on.exit(unlink(tmp), add = TRUE)
 
-  stub(.retry_inference,
-       "birdnetR::predict_species_from_audio_file",
-       function(...) {
-         warning("low signal-to-noise ratio detected")
-         pred
-       })
+  stub(.retry_inference, ".predict_birdnet", function(...) {
+    warning("low signal-to-noise ratio detected")
+    pred
+  })
 
   expect_warning(
-    apply_birdnet_model(tmp, setup, retry_n = 0, retry_wait_s = 0),
+    .retry_inference(tmp, setup, make_params(), 1L, FALSE,
+                     retry_n = 0L, retry_wait_s = 0),
     "low signal-to-noise"
   )
 })
@@ -512,7 +504,6 @@ test_that("inference warnings are re-emitted with file context", {
 
 test_that(".backoff_sleep caps delay at 15 seconds", {
   captured <- numeric(0)
-  # Stub Sys.sleep INSIDE .backoff_sleep
   stub(.backoff_sleep, "Sys.sleep", function(d) captured <<- c(captured, d))
 
   .backoff_sleep(attempt = 7L, wait = 5, reason = "test")

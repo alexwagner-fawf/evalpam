@@ -327,7 +327,7 @@ apply_birdnet_model <- function(audio_file = list.files(system.file("extdata", p
 
     result <- tryCatch(
       withCallingHandlers(
-        birdnetR::predict_species_from_audio_file(
+        .predict_birdnet(
           model               = birdnet_setup$model,
           filter_species      = birdnet_setup$species$label,
           audio_file          = audio_file,
@@ -398,6 +398,14 @@ apply_birdnet_model <- function(audio_file = list.files(system.file("extdata", p
   }
 
   last_error
+}
+
+
+# Thin wrapper so tests can stub this call without needing to intercept
+# a namespace-qualified birdnetR:: call (mockery cannot do that reliably).
+#' @noRd
+.predict_birdnet <- function(...) {
+  birdnetR::predict_species_from_audio_file(...)
 }
 
 
