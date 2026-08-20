@@ -8,6 +8,8 @@ sample_results_table(
   confidence_selection_mode = "top",
   n_per_species = 30,
   deployment_ids,
+  species_ids = NULL,
+  audio_file_ids = NULL,
   grouping_by = c("species_id", "deployment_id"),
   pool
 )
@@ -24,6 +26,16 @@ should be selected. One of:
 \item{n_per_species}{Integer. Number of detections to select per group.}
 
 \item{deployment_ids}{Vector of deployment IDs used to filter audio files.}
+
+\item{species_ids}{Optional integer vector of species IDs. When supplied,
+only detections of these species are considered. \code{NULL} (default)
+applies no species constraint. Combined with \code{audio_file_ids} as a
+logical AND.}
+
+\item{audio_file_ids}{Optional integer vector of audio-file IDs. When
+supplied, only detections in these files are considered, in addition to
+the \code{deployment_ids} filter. \code{NULL} (default) applies no file
+constraint.}
 
 \item{grouping_by}{Character vector specifying columns used for grouping.
 Defaults to \code{c("species_id", "deployment_id")}.}

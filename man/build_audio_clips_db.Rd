@@ -11,8 +11,7 @@ build_audio_clips_db(
   analysis_range = 3,
   output_dir = "spectrograms",
   verbose = TRUE,
-  export_to_db = FALSE,
-  generate_image = FALSE
+  export_to_db = FALSE
 )
 }
 \arguments{
@@ -28,13 +27,9 @@ build_audio_clips_db(
 
 \item{verbose}{Logical. Whether to show a progress bar.}
 
-\item{export_to_db}{Logical. If \code{TRUE}, write the MP3 (and PNG if
-\code{generate_image = TRUE}) as BYTEA blobs to \code{import.spectrograms}.
+\item{export_to_db}{Logical. If \code{TRUE}, write the MP3 as a BYTEA blob
+to \code{import.spectrograms.audio_data}.
 The local file is still written to \code{output_dir} as a cache.}
-
-\item{generate_image}{Logical. If \code{TRUE}, generate a PNG spectrogram
-image (middle frame of a short spectrogram video) and, when
-\code{export_to_db = TRUE}, store it in \code{import.spectrograms.image_data}.}
 }
 \value{
 A list with processing status and errors.

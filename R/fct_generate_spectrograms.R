@@ -13,6 +13,14 @@
 #'   to process. If \code{NULL} (default), deployments are selected from the
 #'   project with one representative per geographic location (earliest start
 #'   date). Supply this to override the automatic selection entirely.
+#' @param species_ids Integer vector or NULL. Restrict spectrogram generation
+#'   to BirdNET detections of these species. \code{NULL} (default) applies no
+#'   species constraint. Combined with \code{audio_file_ids} as a logical AND
+#'   and layered on top of the deployment selection and sampling.
+#' @param audio_file_ids Integer vector or NULL. Restrict spectrogram
+#'   generation to detections in these audio files. \code{NULL} (default)
+#'   applies no file constraint. Files outside the selected deployments are
+#'   still excluded (the two filters intersect).
 #' @param n_per_species Integer. Number of detections to select per group
 #'   (see \code{grouping_by}). Default 30.
 #' @param confidence_selection_mode Character. Passed to
@@ -37,6 +45,8 @@
 generate_spectrograms <- function(pool,
                                   project_id                = NULL,
                                   deployment_ids            = NULL,
+                                  species_ids               = NULL,
+                                  audio_file_ids            = NULL,
                                   n_per_species             = 30L,
                                   confidence_selection_mode = "top",
                                   grouping_by               = c("species_id", "deployment_id"),
@@ -89,6 +99,8 @@ generate_spectrograms <- function(pool,
     confidence_selection_mode = confidence_selection_mode,
     n_per_species             = n_per_species,
     deployment_ids            = selected_deployments$deployment_id,
+    species_ids               = species_ids,
+    audio_file_ids            = audio_file_ids,
     grouping_by               = grouping_by,
     pool                      = pool
   )
@@ -97,7 +109,12 @@ generate_spectrograms <- function(pool,
     stop(
       "sample_results_table() returned 0 rows for deployment_id(s): ",
       paste(selected_deployments$deployment_id, collapse = ", "),
-      ".\nCheck that import.results contains inference output for these deployments."
+      if (!is.null(species_ids))
+        paste0("\n  species_ids filter: ", paste(species_ids, collapse = ", ")),
+      if (!is.null(audio_file_ids))
+        paste0("\n  audio_file_ids filter: ", paste(audio_file_ids, collapse = ", ")),
+      ".\nCheck that import.results contains inference output matching these ",
+      "deployments and any species/audio-file filters."
     )
   }
 

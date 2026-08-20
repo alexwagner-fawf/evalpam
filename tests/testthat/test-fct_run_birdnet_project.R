@@ -345,3 +345,74 @@ test_that("returns empty data frame invisibly when no new results", {
   expect_false(result$visible)
   expect_equal(nrow(result$value), 0L)
 })
+
+# --------------------------------------------------------------------------
+# 7. Species-list mode: mutual exclusivity with spatiotemporal filtering
+# --------------------------------------------------------------------------
+
+test_that("species_ids + explicit spatial_filtering=TRUE aborts (mutually exclusive)", {
+  # Conflict is checked at the very top of the body, before any backend calls.
+  expect_error(
+    run_birdnet_project(pool = list(), project_id = 1L,
+                        species_ids = c(10L, 20L),
+                        spatial_filtering = TRUE, verbose = FALSE),
+    regexp = "not both"
+  )
+})
+
+test_that("species_ids + occurence_min_confidence>0 aborts", {
+  expect_error(
+    run_birdnet_project(pool = list(), project_id = 1L,
+                        species_ids = c(10L),
+                        occurence_min_confidence = 0.3, verbose = FALSE),
+    regexp = "not both"
+  )
+})
+
+test_that("bare species_ids resolves labels + hash and forwards them to workers", {
+  lut <- data.frame(
+    species_id         = c(10L, 20L, 30L),
+    species_scientific = c("Turdus merula", "Cyanistes caeruleus", "Parus major"),
+    stringsAsFactors = FALSE
+  )
+  labels <- c("Turdus merula_Eurasian Blackbird",
+              "Cyanistes caeruleus_Eurasian Blue Tit",
+              "Parus major_Great Tit")
+
+  captured <- NULL
+  stub(run_birdnet_project, "reticulate::py_require",  invisible(NULL))
+  stub(run_birdnet_project, "reticulate::py_config",   invisible(NULL))
+  stub(run_birdnet_project, "sf::st_read",             make_deploy_sf())
+  stub(run_birdnet_project, "dplyr::tbl",              structure(list(), class = "tbl"))
+  stub(run_birdnet_project, "dplyr::filter",           function(x, ...) x)
+  stub(run_birdnet_project, "dplyr::collect",          make_audio_files())
+  stub(run_birdnet_project, "DBI::dbReadTable",        lut)
+  stub(run_birdnet_project, ".birdnet_model_labels",   labels)
+  stub(run_birdnet_project, "golem::app_dev",          FALSE)
+  stub(run_birdnet_project, "dir.create",              invisible(NULL))
+  stub(run_birdnet_project, "list.files",              character(0))
+  stub(run_birdnet_project, "future::plan",            invisible(NULL))
+  stub(run_birdnet_project, "future.apply::future_mapply", function(...) {
+    captured <<- list(...)
+    list()
+  })
+  stub(run_birdnet_project, "fst::read_fst",           data.frame())
+  stub(run_birdnet_project, "dplyr::bind_rows",        data.frame())
+  stub(run_birdnet_project, "dplyr::anti_join",        data.frame())
+  stub(run_birdnet_project, "file.exists",             FALSE)
+
+  suppressMessages(
+    run_birdnet_project(pool = list(), project_id = 1L,
+                        species_ids = c(10L, 30L),
+                        upload_inference = FALSE, verbose = FALSE)
+  )
+
+  more <- captured$MoreArgs
+  expect_setequal(more$species_filter_labels,
+                  c("Turdus merula_Eurasian Blackbird", "Parus major_Great Tit"))
+  # A real hash was computed (not the spatiotemporal-mode sentinel).
+  expect_type(more$species_filter_hash, "character")
+  expect_false(identical(more$species_filter_hash, "none"))
+  expect_equal(more$species_filter_hash,
+               digest::digest(sort(more$species_filter_labels), algo = "xxhash64"))
+})

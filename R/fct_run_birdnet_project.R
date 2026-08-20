@@ -12,6 +12,17 @@
 #'
 #' @param pool A database connection pool (from \code{\link{set_db_pool}}).
 #' @param project_id Integer. ID of the project to process.
+#' @param species_ids Integer vector or NULL. Explicit list of species (ids
+#'   from \code{lut_species_code}) to restrict inference to. This is mutually
+#'   exclusive with spatiotemporal filtering: supplying \code{species_ids}
+#'   \emph{and} explicitly requesting spatial/temporal filtering (a truthy
+#'   \code{spatial_filtering}/\code{temporal_filtering} or
+#'   \code{occurence_min_confidence > 0}) is an error. When \code{species_ids}
+#'   is given, location/time filtering is disabled, the exact list is searched
+#'   (unlikely species included), and latitude/longitude/week/eBird-confidence
+#'   are stored as null in the settings row. Ids absent from
+#'   \code{lut_species_code}, or species the BirdNET model cannot detect, abort
+#'   the run. \code{NULL} (default) uses spatiotemporal filtering.
 #' @param n_workers Integer. Number of parallel future workers. Default 4.
 #' @param conda_env_name Character or NULL. Name of a conda environment to use
 #'   for Python/BirdNET. \code{NULL} (default) uses birdnetR's managed
@@ -41,6 +52,7 @@
 #' @export
 run_birdnet_project <- function(pool,
                                 project_id,
+                                species_ids                = NULL,
                                 n_workers                  = 4L,
                                 conda_env_name             = NULL,
                                 occurence_min_confidence   = 0.03,
@@ -51,6 +63,32 @@ run_birdnet_project <- function(pool,
                                 coordinates_decimal_places = 1L,
                                 results_folder             = NULL,
                                 verbose                    = TRUE) {
+
+  # ── Species-selection mode: explicit list XOR spatiotemporal filtering ──────
+  # These two ways of restricting the searched species set are mutually
+  # exclusive. `missing()` distinguishes "user asked for filtering" from the
+  # defaults, so a bare `species_ids = ...` call transparently switches to
+  # list mode, while explicitly combining the two is an error.
+  use_species_list <- !is.null(species_ids)
+  if (use_species_list) {
+    conflict <-
+      (!missing(spatial_filtering)        && isTRUE(spatial_filtering))  ||
+      (!missing(temporal_filtering)       && isTRUE(temporal_filtering)) ||
+      (!missing(occurence_min_confidence) && occurence_min_confidence > 0)
+    if (conflict) {
+      stop("Provide either `species_ids` (explicit species list) OR ",
+           "spatiotemporal filtering (`spatial_filtering` / `temporal_filtering` / ",
+           "`occurence_min_confidence` > 0), not both. When `species_ids` is set, ",
+           "location/time filtering is disabled.")
+    }
+    spatial_filtering        <- FALSE
+    temporal_filtering       <- FALSE
+    occurence_min_confidence <- 0
+    if (verbose) message(sprintf(
+      "Species-list mode: %d species requested; spatial/temporal filtering disabled.",
+      length(unique(species_ids))
+    ))
+  }
 
   if (!spatial_filtering) {
     occurence_min_confidence <- 0
@@ -111,6 +149,19 @@ run_birdnet_project <- function(pool,
     dplyr::collect()
 
   species <- DBI::dbReadTable(pool, DBI::Id("lut_species_code"))
+
+  # ── Resolve explicit species filter (validate once, before spawning workers) ─
+  species_filter_labels <- NULL
+  species_filter_hash   <- "none"
+  if (use_species_list) {
+    model_labels          <- .birdnet_model_labels(version = "v2.4", language = "en_us")
+    species_filter_labels <- resolve_species_filter_labels(species_ids, species, model_labels)
+    species_filter_hash   <- digest::digest(sort(species_filter_labels), algo = "xxhash64")
+    if (verbose) message(sprintf(
+      "Resolved %d species id(s) to %d BirdNET label(s); settings species_filter = %s.",
+      length(unique(species_ids)), length(species_filter_labels), species_filter_hash
+    ))
+  }
 
   # ── Dev-mode coordinate check ─────────────────────────────────────────────────
   is_dev       <- tryCatch(golem::app_dev(), error = function(e) FALSE)
@@ -181,7 +232,9 @@ run_birdnet_project <- function(pool,
                                           coordinates_decimal_places,
                                           conda_env_python,
                                           temp_results_folder,
-                                          pkg_dev_path) {
+                                          pkg_dev_path,
+                                          species_filter_labels,
+                                          species_filter_hash) {
 
       Sys.setenv(
         OMP_NUM_THREADS      = 1,
@@ -232,7 +285,9 @@ run_birdnet_project <- function(pool,
           species                    = species,
           verbose                    = FALSE,
           coordinates_decimal_places = coordinates_decimal_places,
-          tflite_num_threads         = 1L
+          tflite_num_threads         = 1L,
+          species_filter_labels      = species_filter_labels,
+          species_filter_hash        = species_filter_hash
         ),
         error = function(e) {
           warning("Worker failed for deployment ", deployment_id, ": ", conditionMessage(e))
@@ -284,7 +339,9 @@ run_birdnet_project <- function(pool,
         coordinates_decimal_places = coordinates_decimal_places,
         conda_env_python           = conda_env_python,
         temp_results_folder        = temp_results_folder,
-        pkg_dev_path               = pkg_dev_path
+        pkg_dev_path               = pkg_dev_path,
+        species_filter_labels      = species_filter_labels,
+        species_filter_hash        = species_filter_hash
       ),
       SIMPLIFY    = FALSE,
       future.seed = TRUE

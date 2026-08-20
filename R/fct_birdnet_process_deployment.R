@@ -16,6 +16,16 @@
 #' @param verbose Logical. Print progress messages.
 #' @param internal_pool DBI pool object. If NULL, a new pool will be created.
 #' @param coordinates_decimal_places integer, number of decimal places for epsg4326 coordinates (only 1 or 2 decimal places are meaningful, 2 may lead to more fine grained species filters but 1 should be enough and reduce the number of settings in the database)
+#' @param species_filter_labels Character vector or NULL. Explicit BirdNET
+#'   labels (from \code{\link{resolve_species_filter_labels}}) to restrict
+#'   inference to. When supplied, this overrides the spatiotemporal (eBird)
+#'   species list entirely: location/time play no role, unlikely species are
+#'   still included, and \code{latitude}/\code{longitude}/\code{week}/
+#'   \code{ebird_min_confidence} are stored as null in the settings row.
+#'   \code{NULL} (default) uses the spatiotemporal list.
+#' @param species_filter_hash Character. Stable hash of the species-list filter
+#'   used as part of settings identity, or \code{"none"} (default) in
+#'   spatiotemporal mode.
 #'
 #' @return Data frame of BirdNET inference results.
 #' @export
@@ -29,7 +39,9 @@ process_deployment_birdnet <- function(deployment_id,
                                verbose = TRUE,
                                internal_pool = NULL,
                                coordinates_decimal_places = 1L,
-                               tflite_num_threads = 1) {
+                               tflite_num_threads = 1,
+                               species_filter_labels = NULL,
+                               species_filter_hash = "none") {
   if(is.null(internal_pool)) internal_pool <- set_db_pool()
   on.exit(pool::poolClose(internal_pool), add = TRUE)
 
@@ -38,20 +50,41 @@ process_deployment_birdnet <- function(deployment_id,
   dep_info <- get_deployment_info(deployments, deployment_id)
   audio_files_subset <- get_audio_files_for_deployment(audio_files, deployment_id, temporal_filtering)
 
+  list_mode <- !is.null(species_filter_labels)
+
   birdnet_inference_list_weekly <- vector("list", length = length(unique(audio_files_subset$week)))
 
   for(week_i in seq_along(unique(audio_files_subset$week))) {
     week <- unique(audio_files_subset$week)[week_i]
     if(week == -999) week <- NULL
 
-    model_info <- prepare_birdnet_model(latitude = round(dep_info$coordinates[2], coordinates_decimal_places),
-                                        longitude =  round(dep_info$coordinates[1], coordinates_decimal_places),
+    # Species-list mode: location/time are inert. Pass NULL coordinates/week so
+    # no eBird prediction is attempted, and override the model's species set
+    # with the explicit list below.
+    if (list_mode) {
+      latitude <- NULL
+      longitude <- NULL
+      week <- NULL
+    } else {
+      latitude  <- round(dep_info$coordinates[2], coordinates_decimal_places)
+      longitude <- round(dep_info$coordinates[1], coordinates_decimal_places)
+    }
+
+    model_info <- prepare_birdnet_model(latitude = latitude,
+                                        longitude = longitude,
                                         week =  week,
                                         min_confidence = occurence_min_confidence,
                                         birdnet_params_list = birdnet_params_list,
-                                        tflite_num_threads = tflite_num_threads)
+                                        tflite_num_threads = tflite_num_threads,
+                                        species_filter_hash = species_filter_hash)
     bnm <- model_info$bnm
     birdnet_params <- model_info$birdnet_params
+
+    # Explicit list overrides the spatiotemporal species set entirely.
+    if (list_mode) {
+      bnm$species <- data.frame(label = species_filter_labels,
+                                stringsAsFactors = FALSE)
+    }
 
     # get_possible_species must run before upsert_birdnet_settings so species_ids
     # can be written to settings_species in the same transaction
@@ -102,13 +135,21 @@ get_audio_files_for_deployment <- function(audio_files, deployment_id, temporal_
 }
 
 #' @keywords internal
-prepare_birdnet_model <- function(latitude, longitude, week, min_confidence, birdnet_params_list = list(), tflite_num_threads) {
+prepare_birdnet_model <- function(latitude, longitude, week, min_confidence,
+                                  birdnet_params_list = list(), tflite_num_threads,
+                                  species_filter_hash = "none") {
   bnm <- setup_birdnet_model(version = "v2.4",
                              latitude = latitude,
                              longitude = longitude,
                              week = week,
                              min_confidence = min_confidence,
                              tflite_num_threads = tflite_num_threads)
+
+  # In species-list mode the spatiotemporal keys play no role in inference and
+  # are stored as JSON null (NA -> null via na="null" at serialisation). The
+  # species_filter hash is what makes the settings row identity distinct, so
+  # different species lists never collide on the model_params `@>` dedup.
+  list_mode <- !identical(species_filter_hash, "none")
 
   defaults <- list(
     model_name = bnm$model_name,
@@ -122,10 +163,11 @@ prepare_birdnet_model <- function(latitude, longitude, week, min_confidence, bir
     sigmoid_sensitivity = 1,
     keep_empty = FALSE,
     locale = "de",
-    latitude = latitude,
-    longitude = longitude,
-    week = week,
-    ebird_min_confidence = min_confidence
+    latitude             = if (list_mode) NA_real_    else latitude,
+    longitude            = if (list_mode) NA_real_    else longitude,
+    week                 = if (list_mode) NA_integer_ else week,
+    ebird_min_confidence = if (list_mode) NA_real_    else min_confidence,
+    species_filter       = species_filter_hash
   )
 
   birdnet_params <- modifyList(defaults, birdnet_params_list)
@@ -143,7 +185,12 @@ upsert_birdnet_settings <- function(pool, bnm, birdnet_params, species_ids) {
     model_params = I(list(birdnet_params))
   )
 
-  settings$model_params <- lapply(settings$model_params, jsonlite::toJSON, auto_unbox = TRUE)
+  # na = "null" so that inert spatiotemporal keys (latitude/longitude/week/
+  # ebird_min_confidence in species-list mode) serialise to JSON null rather
+  # than the string "NA". This single serialisation is reused for both the
+  # `@>` existence check and the INSERT, keeping settings identity consistent.
+  settings$model_params <- lapply(settings$model_params, jsonlite::toJSON,
+                                  auto_unbox = TRUE, na = "null")
 
   query <- "SELECT * FROM import.settings WHERE model_params @> $1::jsonb;"
   existing <- dbGetQuery(pool, query, params = settings$model_params)
@@ -157,6 +204,67 @@ upsert_birdnet_settings <- function(pool, bnm, birdnet_params, species_ids) {
     new_settings_id <- existing$settings_id[1]
   }
   new_settings_id
+}
+
+#' Read the BirdNET label set for a model version
+#'
+#' Thin wrapper around birdnetR so tests can stub the label lookup without a
+#' working Python/model backend.
+#'
+#' @param version Character. BirdNET model version. Default "v2.4".
+#' @param language Character. Label language. Default "en_us".
+#' @return Character vector of BirdNET labels ("Genus species_Common Name").
+#' @noRd
+.birdnet_model_labels <- function(version = "v2.4", language = "en_us") {
+  model <- birdnetR::birdnet_model_tflite(version = version, language = language)
+  birdnetR::read_labels(birdnetR::labels_path(model, language = language))
+}
+
+#' Resolve an explicit species filter to BirdNET labels
+#'
+#' Maps a vector of \code{species_id}s (from \code{lut_species_code}) to the
+#' BirdNET label strings the model uses (\code{"Genus species_Common Name"}),
+#' validating against both the lookup table and the model's own label set.
+#'
+#' Aborts if any id is absent from \code{species_lut}, or if a requested
+#' species has no matching label in the model (i.e. the model cannot detect
+#' it). Matching is by exact scientific name; the evalpam LUT is generated from
+#' the BirdNET label set, so exact matching is reliable and this abort also
+#' catches LUT/model version drift.
+#'
+#' @param species_ids Integer vector of species ids to restrict inference to.
+#' @param species_lut Data frame with \code{species_id} and
+#'   \code{species_scientific} columns.
+#' @param model_labels Character vector of BirdNET labels for the model
+#'   (e.g. from \code{.birdnet_model_labels()}).
+#' @return Character vector of BirdNET labels to pass as \code{filter_species}.
+#' @noRd
+resolve_species_filter_labels <- function(species_ids, species_lut, model_labels) {
+  ids <- unique(as.integer(species_ids))
+  ids <- ids[!is.na(ids)]
+  if (length(ids) == 0) {
+    stop("`species_ids` contains no usable (non-NA) ids.")
+  }
+
+  hit <- species_lut[match(ids, species_lut$species_id), , drop = FALSE]
+  missing_ids <- ids[is.na(hit$species_id)]
+  if (length(missing_ids) > 0) {
+    stop("species_ids not found in lut_species_code: ",
+         paste(missing_ids, collapse = ", "))
+  }
+
+  requested_sci <- hit$species_scientific
+  # BirdNET label format: "Genus species_Common Name" — scientific part is
+  # everything before the first underscore.
+  sci_of_label <- sub("_.*$", "", model_labels)
+
+  not_in_model <- setdiff(requested_sci, sci_of_label)
+  if (length(not_in_model) > 0) {
+    stop("species not detectable by this BirdNET model (no matching label): ",
+         paste(not_in_model, collapse = ", "))
+  }
+
+  model_labels[sci_of_label %in% requested_sci]
 }
 
 #' @keywords internal

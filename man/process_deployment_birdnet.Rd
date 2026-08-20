@@ -15,7 +15,9 @@ process_deployment_birdnet(
   verbose = TRUE,
   internal_pool = NULL,
   coordinates_decimal_places = 1L,
-  tflite_num_threads = 1
+  tflite_num_threads = 1,
+  species_filter_labels = NULL,
+  species_filter_hash = "none"
 )
 }
 \arguments{
@@ -36,6 +38,18 @@ process_deployment_birdnet(
 \item{internal_pool}{DBI pool object. If NULL, a new pool will be created.}
 
 \item{coordinates_decimal_places}{integer, number of decimal places for epsg4326 coordinates (only 1 or 2 decimal places are meaningful, 2 may lead to more fine grained species filters but 1 should be enough and reduce the number of settings in the database)}
+
+\item{species_filter_labels}{Character vector or NULL. Explicit BirdNET
+labels (from \code{\link{resolve_species_filter_labels}}) to restrict
+inference to. When supplied, this overrides the spatiotemporal (eBird)
+species list entirely: location/time play no role, unlikely species are
+still included, and \code{latitude}/\code{longitude}/\code{week}/
+\code{ebird_min_confidence} are stored as null in the settings row.
+\code{NULL} (default) uses the spatiotemporal list.}
+
+\item{species_filter_hash}{Character. Stable hash of the species-list filter
+used as part of settings identity, or \code{"none"} (default) in
+spatiotemporal mode.}
 }
 \value{
 Data frame of BirdNET inference results.

@@ -16,8 +16,19 @@ app_server(input, output, session, pool)
 \item{pool}{The database connection pool.}
 }
 \description{
-Änderungen/Fixes:
-1. Endlosschleife bei der Artenauswahl behoben (isolate).
-2. Spaltennamen korrigiert (prediction -> species_short).
-3. Robustere Checks gegen leere Daten.
+Key behaviours:
+1. `save_trigger` is a manual reactiveVal used to invalidate DB-dependent
+   reactives after every save (Shiny cannot detect external DB changes).
+2. Species selection uses internal `species_id` values; labels are derived
+   on the fly from the chosen language.
+3. Annotation modes:
+   - "binary": only the target/queue species is evaluated. Extra species in
+     the multi-select are ignored on save. Abiotic sounds are skipped too.
+   - "full": the entire clip is labelled. A chosen target species acts
+     purely as a queue/sort key; occupancy still counts only that species.
+     With no target species set, this is free full annotation without any
+     occupancy auto-stop.
+4. Occupancy groups (`import.occupancy_groups` + `import.spectrogram_groups`)
+   drive the auto-stop: once a group has `target_count` certain hits for the
+   active queue species, its remaining spectrograms are filtered out.
 }

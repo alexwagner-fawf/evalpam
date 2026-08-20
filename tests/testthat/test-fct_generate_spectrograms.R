@@ -251,6 +251,58 @@ test_that("errors when sample_results_table returns 0 rows", {
 })
 
 # --------------------------------------------------------------------------
+# 4b. species_ids / audio_file_ids pass-through
+# --------------------------------------------------------------------------
+
+test_that("species_ids and audio_file_ids are forwarded to sample_results_table", {
+  captured <- list()
+  stub(generate_spectrograms, "sf::st_read", make_deploy_sf(1))
+  stub(generate_spectrograms, "sample_results_table",
+       function(species_ids, audio_file_ids, ...) {
+         captured$species_ids    <<- species_ids
+         captured$audio_file_ids <<- audio_file_ids
+         make_samples()
+       })
+  stub(generate_spectrograms, "build_audio_clips_db", function(...) invisible(NULL))
+  suppressMessages(
+    generate_spectrograms(pool = list(), project_id = 1L,
+                          species_ids = c(2L, 5L), audio_file_ids = 42L,
+                          verbose = FALSE)
+  )
+  expect_equal(captured$species_ids, c(2L, 5L))
+  expect_equal(captured$audio_file_ids, 42L)
+})
+
+test_that("filters default to NULL (no constraint) when omitted", {
+  captured <- list(species_ids = "unset", audio_file_ids = "unset")
+  stub(generate_spectrograms, "sf::st_read", make_deploy_sf(1))
+  stub(generate_spectrograms, "sample_results_table",
+       function(species_ids, audio_file_ids, ...) {
+         captured$species_ids    <<- species_ids
+         captured$audio_file_ids <<- audio_file_ids
+         make_samples()
+       })
+  stub(generate_spectrograms, "build_audio_clips_db", function(...) invisible(NULL))
+  suppressMessages(
+    generate_spectrograms(pool = list(), project_id = 1L, verbose = FALSE)
+  )
+  expect_null(captured$species_ids)
+  expect_null(captured$audio_file_ids)
+})
+
+# --------------------------------------------------------------------------
+# 4c. .normalise_id_filter helper
+# --------------------------------------------------------------------------
+
+test_that(".normalise_id_filter cleans optional id vectors", {
+  expect_null(.normalise_id_filter(NULL))
+  expect_null(.normalise_id_filter(integer(0)))
+  expect_null(.normalise_id_filter(c(NA, NA)))
+  expect_equal(.normalise_id_filter(c(3L, 3L, 1L)), c(3L, 1L))   # de-duplicated
+  expect_equal(.normalise_id_filter(c(2, NA, 4)), c(2L, 4L))     # NA dropped, coerced
+})
+
+# --------------------------------------------------------------------------
 # 5. Return value
 # --------------------------------------------------------------------------
 
