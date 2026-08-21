@@ -92,17 +92,48 @@ process_deployment_birdnet <- function(deployment_id,
     settings_id <- upsert_birdnet_settings(internal_pool, bnm, birdnet_params,
                                            species_ids = possible_species$species_id)
 
-    birdnet_inference_list_weekly[[week_i]] <- run_birdnet_inference(audio_files_subset,
+    # Settings-aware resume: skip audio files already analysed under THIS
+    # settings_id (import.analysis_log is the source of truth). A settings change
+    # yields a new settings_id, so nothing is skipped and every file is re-run;
+    # under unchanged settings, already-done files (including those shared with
+    # nearby deployments via the same settings_id) are skipped.
+    audio_files_todo <- filter_unprocessed_audio_files(internal_pool,
+                                                       audio_files_subset,
+                                                       settings_id)
+    n_skip <- nrow(audio_files_subset) - nrow(audio_files_todo)
+    if (verbose && n_skip > 0)
+      message(sprintf("  Deployment %s: %d/%d file(s) already analysed under settings_id %s; skipping.",
+                      deployment_id, n_skip, nrow(audio_files_subset), settings_id))
+
+    if (nrow(audio_files_todo) == 0) next  # nothing new for this settings
+
+    birdnet_inference_list_weekly[[week_i]] <- run_birdnet_inference(audio_files_todo,
                                                                      bnm,
                                                                      birdnet_params,
                                                                      settings_id,
                                                                      possible_species)
   }
 
-  return(
-    dplyr::bind_rows(birdnet_inference_list_weekly)
-  )
+  result <- dplyr::bind_rows(birdnet_inference_list_weekly)
 
+  # When every file was skipped by the settings-aware resume, bind_rows() of the
+  # all-NULL list yields a 0-column frame that fst::write_fst() cannot write.
+  # Return a typed 0-row frame with the canonical result schema instead.
+  if (ncol(result) == 0) {
+    result <- data.frame(
+      audio_file_id = integer(0),
+      settings_id   = integer(0),
+      begin_time_ms = integer(0),
+      end_time_ms   = integer(0),
+      confidence    = integer(0),
+      species_id    = integer(0),
+      behavior_id   = integer(0),
+      error_type    = character(0),
+      analysed_at   = as.POSIXct(character(0))
+    )
+  }
+
+  return(result)
 }
 
 # ------------------ Internal helper functions ------------------
@@ -265,6 +296,32 @@ resolve_species_filter_labels <- function(species_ids, species_lut, model_labels
   }
 
   model_labels[sci_of_label %in% requested_sci]
+}
+
+#' Drop audio files already analysed under a given settings_id
+#'
+#' Settings-aware resume filter: queries \code{import.analysis_log} for the
+#' files that already completed successfully under \code{settings_id} and
+#' removes them from \code{audio_files_subset}. Files that previously failed
+#' (\code{status <> 'success'}) are kept so they are retried.
+#'
+#' @param pool DBI pool / connection.
+#' @param audio_files_subset Data frame with an \code{audio_file_id} column.
+#' @param settings_id Integer settings id resolved for this run.
+#' @return \code{audio_files_subset} with already-analysed rows removed.
+#' @noRd
+filter_unprocessed_audio_files <- function(pool, audio_files_subset, settings_id) {
+  if (nrow(audio_files_subset) == 0) return(audio_files_subset)
+
+  done <- DBI::dbGetQuery(
+    pool,
+    "SELECT audio_file_id FROM import.analysis_log
+     WHERE settings_id = $1 AND status = 'success'",
+    params = list(settings_id)
+  )
+
+  audio_files_subset[!audio_files_subset$audio_file_id %in% done$audio_file_id, ,
+                     drop = FALSE]
 }
 
 #' @keywords internal

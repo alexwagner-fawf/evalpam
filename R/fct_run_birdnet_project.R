@@ -204,11 +204,38 @@ run_birdnet_project <- function(pool,
       stringr::str_remove("/$")
   }
 
+  # ── Settings signature (scopes the local temp buffer) ────────────────────────
+  # A hash of every run-level knob that changes the resulting settings_id.
+  # Deployment coordinates are intentionally omitted: they are constant per
+  # deployment, and nearby deployments that round to the same lat/lon share a
+  # settings_id (resolved in the DB) — that de-duplication is handled by the
+  # per-file DB resume check inside the worker, not here. The temp buffer is a
+  # PRE-UPLOAD crash cache only; scoping it by signature keeps a stale run under
+  # different settings from masking a re-run as "already processed". The DB
+  # (import.analysis_log) remains the source of truth for what has been analysed.
+  settings_signature <- digest::digest(
+    list(
+      model_version              = "v2.4",
+      birdnet_params_list        = birdnet_params_list,
+      occurence_min_confidence   = occurence_min_confidence,
+      spatial_filtering          = spatial_filtering,
+      temporal_filtering         = temporal_filtering,
+      species_filter_hash        = species_filter_hash,
+      coordinates_decimal_places = coordinates_decimal_places
+    ),
+    algo = "xxhash64"
+  )
+  if (verbose) message("Settings signature: ", settings_signature)
+
   dir.create(file.path(results_folder, "inference_results"), showWarnings = FALSE)
-  temp_results_folder <- file.path(results_folder, "inference_results_temp")
-  dir.create(temp_results_folder, showWarnings = FALSE)
+  temp_results_folder <- file.path(results_folder, "inference_results_temp", settings_signature)
+  dir.create(temp_results_folder, recursive = TRUE, showWarnings = FALSE)
 
   # ── Determine remaining deployments ─────────────────────────────────────────
+  # temp_results_folder is scoped to the current settings signature (see above),
+  # so a deployment counts as "finished" only if it was processed under THESE
+  # settings. Changing any setting selects a different temp folder, and the
+  # deployment is re-run automatically.
   finished_deployments <- list.files(temp_results_folder) |>
     tools::file_path_sans_ext() |>
     as.integer()
@@ -372,32 +399,13 @@ run_birdnet_project <- function(pool,
     )
   }
 
-  all_temp_fst <- list.files(temp_results_folder, full.names = TRUE, pattern = "\\.fst$")
-
-  # Skip fully-indexed deployments to avoid loading large files unnecessarily
-  temp_fst_to_load <- if (nrow(inference_index) > 0 && length(all_temp_fst) > 0) {
-    indexed_af_ids <- inference_index |>
-      dplyr::filter(.data$status == "success") |>
-      dplyr::pull(.data$audio_file_id)
-
-    fully_indexed_dep_ids <- audio_files |>
-      dplyr::group_by(.data$deployment_id) |>
-      dplyr::filter(all(.data$audio_file_id %in% indexed_af_ids)) |>
-      dplyr::pull(.data$deployment_id) |>
-      unique()
-
-    kept <- all_temp_fst[
-      !(tools::file_path_sans_ext(basename(all_temp_fst)) %in%
-          as.character(fully_indexed_dep_ids))
-    ]
-    n_skipped <- length(all_temp_fst) - length(kept)
-    if (n_skipped > 0 && verbose)
-      message(sprintf("Skipping %d fully-indexed deployment temp file(s); loading %d.",
-                      n_skipped, length(kept)))
-    kept
-  } else {
-    all_temp_fst
-  }
+  # temp_results_folder is scoped to the current settings signature, so this
+  # only picks up temp files produced under THESE settings. Load them all and
+  # let the settings-aware anti_join below (keyed on audio_file_id + settings_id)
+  # do the de-duplication. The previous index-based pre-filter was settings-blind
+  # (keyed on audio_file_id only) and would drop freshly-computed results whose
+  # audio files happened to be indexed under a different settings_id.
+  temp_fst_to_load <- list.files(temp_results_folder, full.names = TRUE, pattern = "\\.fst$")
 
   birdnet_inference <- temp_fst_to_load |>
     lapply(fst::read_fst) |>
