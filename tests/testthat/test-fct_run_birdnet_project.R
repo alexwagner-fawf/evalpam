@@ -416,3 +416,49 @@ test_that("bare species_ids resolves labels + hash and forwards them to workers"
   expect_equal(more$species_filter_hash,
                digest::digest(sort(more$species_filter_labels), algo = "xxhash64"))
 })
+
+# --------------------------------------------------------------------------
+# 8. DB credentials are resolved in the main process and passed to workers
+# --------------------------------------------------------------------------
+
+test_that("workers receive db_credentials resolved from the main process", {
+  captured <- NULL
+  stub(run_birdnet_project, "reticulate::py_require",  invisible(NULL))
+  stub(run_birdnet_project, "reticulate::py_config",   invisible(NULL))
+  stub(run_birdnet_project, "sf::st_read",             make_deploy_sf())
+  stub(run_birdnet_project, "dplyr::tbl",              structure(list(), class = "tbl"))
+  stub(run_birdnet_project, "dplyr::filter",           function(x, ...) x)
+  stub(run_birdnet_project, "dplyr::collect",          make_audio_files())
+  stub(run_birdnet_project, "DBI::dbReadTable",        data.frame())
+  stub(run_birdnet_project, "golem::app_dev",          FALSE)
+  # Credential resolution stubbed so the test does not touch the real keychain.
+  stub(run_birdnet_project, "get_golem_config",
+       function(value, ...) switch(value,
+                                   pg_user = "u", pg_host = "h",
+                                   pg_port = 5432L, pg_dbname = "db"))
+  stub(run_birdnet_project, ".resolve_db_password", function(...) "secret")
+  stub(run_birdnet_project, "dir.create",              invisible(NULL))
+  stub(run_birdnet_project, "list.files",              character(0))
+  stub(run_birdnet_project, "future::plan",            invisible(NULL))
+  stub(run_birdnet_project, "future.apply::future_mapply", function(...) {
+    captured <<- list(...)
+    list()
+  })
+  stub(run_birdnet_project, "fst::read_fst",           data.frame())
+  stub(run_birdnet_project, "dplyr::bind_rows",        data.frame())
+  stub(run_birdnet_project, "dplyr::anti_join",        data.frame())
+  stub(run_birdnet_project, "file.exists",             FALSE)
+
+  suppressMessages(
+    run_birdnet_project(pool = list(), project_id = 1L,
+                        upload_inference = FALSE, verbose = FALSE)
+  )
+
+  creds <- captured$MoreArgs$db_credentials
+  expect_type(creds, "list")
+  expect_equal(creds$user, "u")
+  expect_equal(creds$host, "h")
+  expect_equal(creds$port, 5432L)
+  expect_equal(creds$dbname, "db")
+  expect_equal(creds$password, "secret")   # resolved once, in the main process
+})

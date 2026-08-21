@@ -47,11 +47,15 @@ set_db_pool <- function(user = NULL,
                         password = NULL,
                         fail_with_error = FALSE) {
   tryCatch({
+    # NB: use if/else, not ifelse() — ifelse() evaluates BOTH branches, so it
+    # would call get_golem_config() even when explicit credentials are passed.
+    # That matters for future workers, where golem config / keychain are not
+    # available and credentials must be supplied explicitly.
     pool::dbPool(RPostgres::Postgres(),
-                 user = ifelse(is.null(user), get_golem_config("pg_user"), user),
-                 host = ifelse(is.null(host), get_golem_config("pg_host"), host),
-                 port = ifelse(is.null(port), get_golem_config("pg_port"), port),
-                 dbname = ifelse(is.null(dbname), get_golem_config("pg_dbname"), dbname),
+                 user   = if (is.null(user))   get_golem_config("pg_user")   else user,
+                 host   = if (is.null(host))   get_golem_config("pg_host")   else host,
+                 port   = if (is.null(port))   get_golem_config("pg_port")   else port,
+                 dbname = if (is.null(dbname)) get_golem_config("pg_dbname") else dbname,
                  password = if (is.null(password)) {
                    .resolve_db_password(get_golem_config("pg_user"))
                  } else {

@@ -248,6 +248,19 @@ run_birdnet_project <- function(pool,
     if (verbose) message("All deployments already processed. Proceeding to aggregation.")
   } else {
 
+    # ── DB credentials for workers ────────────────────────────────────────────
+    # future workers run in separate R processes without access to the OS
+    # keychain or the active golem config profile, so set_db_pool() would fail
+    # there. Resolve credentials once here (in the main process, where they
+    # work) and pass them explicitly to each worker.
+    db_credentials <- list(
+      user     = get_golem_config("pg_user"),
+      host     = get_golem_config("pg_host"),
+      port     = get_golem_config("pg_port"),
+      dbname   = get_golem_config("pg_dbname"),
+      password = .resolve_db_password(get_golem_config("pg_user"))
+    )
+
     # ── Worker function ───────────────────────────────────────────────────────
     process_deployment_worker <- function(deployment_id,
                                           audio_files,
@@ -261,7 +274,8 @@ run_birdnet_project <- function(pool,
                                           temp_results_folder,
                                           pkg_dev_path,
                                           species_filter_labels,
-                                          species_filter_hash) {
+                                          species_filter_hash,
+                                          db_credentials) {
 
       Sys.setenv(
         OMP_NUM_THREADS      = 1,
@@ -302,20 +316,33 @@ run_birdnet_project <- function(pool,
       temp_file_name <- file.path(temp_results_folder, paste0(deployment_id, ".fst"))
 
       result_df <- tryCatch(
-        process_deployment_birdnet(
-          deployment_id              = deployment_id,
-          deployments                = deployments,
-          audio_files                = audio_files,
-          temporal_filtering         = temporal_filtering,
-          occurence_min_confidence   = occurence_min_confidence,
-          birdnet_params_list        = birdnet_params_list,
-          species                    = species,
-          verbose                    = FALSE,
-          coordinates_decimal_places = coordinates_decimal_places,
-          tflite_num_threads         = 1L,
-          species_filter_labels      = species_filter_labels,
-          species_filter_hash        = species_filter_hash
-        ),
+        {
+          # Build the worker's DB pool from credentials resolved in the main
+          # process (keychain/config are not reachable from here).
+          worker_pool <- set_db_pool(
+            user     = db_credentials$user,
+            host     = db_credentials$host,
+            port     = db_credentials$port,
+            dbname   = db_credentials$dbname,
+            password = db_credentials$password,
+            fail_with_error = TRUE
+          )
+          process_deployment_birdnet(
+            deployment_id              = deployment_id,
+            deployments                = deployments,
+            audio_files                = audio_files,
+            temporal_filtering         = temporal_filtering,
+            occurence_min_confidence   = occurence_min_confidence,
+            birdnet_params_list        = birdnet_params_list,
+            species                    = species,
+            verbose                    = FALSE,
+            internal_pool              = worker_pool,
+            coordinates_decimal_places = coordinates_decimal_places,
+            tflite_num_threads         = 1L,
+            species_filter_labels      = species_filter_labels,
+            species_filter_hash        = species_filter_hash
+          )
+        },
         error = function(e) {
           warning("Worker failed for deployment ", deployment_id, ": ", conditionMessage(e))
           af_ids <- audio_files$audio_file_id[audio_files$deployment_id == deployment_id]
@@ -368,7 +395,8 @@ run_birdnet_project <- function(pool,
         temp_results_folder        = temp_results_folder,
         pkg_dev_path               = pkg_dev_path,
         species_filter_labels      = species_filter_labels,
-        species_filter_hash        = species_filter_hash
+        species_filter_hash        = species_filter_hash,
+        db_credentials             = db_credentials
       ),
       SIMPLIFY    = FALSE,
       future.seed = TRUE
