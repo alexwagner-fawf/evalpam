@@ -117,6 +117,21 @@ test_that("explicit output_dir is passed through unchanged", {
   expect_equal(captured_dir, "/custom/dir")
 })
 
+test_that("settings_ids is forwarded to sample_results_table", {
+  captured <- NULL
+  stub(generate_spectrograms, "sf::st_read", make_deploy_sf(1))
+  stub(generate_spectrograms, "sample_results_table", function(settings_ids, ...) {
+    captured <<- settings_ids
+    make_samples()
+  })
+  stub(generate_spectrograms, "build_audio_clips_db", function(...) invisible(NULL))
+  suppressMessages(
+    generate_spectrograms(pool = list(), project_id = 1L,
+                          settings_ids = c(3L, 7L), verbose = FALSE)
+  )
+  expect_equal(captured, c(3L, 7L))
+})
+
 # --------------------------------------------------------------------------
 # 2. Deployment selection: one per location vs explicit IDs
 # --------------------------------------------------------------------------

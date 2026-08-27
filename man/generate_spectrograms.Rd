@@ -10,6 +10,7 @@ generate_spectrograms(
   deployment_ids = NULL,
   species_ids = NULL,
   audio_file_ids = NULL,
+  settings_ids = NULL,
   n_per_species = 30L,
   confidence_selection_mode = "top",
   grouping_by = c("species_id", "deployment_id"),
@@ -41,6 +42,11 @@ and layered on top of the deployment selection and sampling.}
 generation to detections in these audio files. \code{NULL} (default)
 applies no file constraint. Files outside the selected deployments are
 still excluded (the two filters intersect).}
+
+\item{settings_ids}{Integer vector or NULL. Restrict spectrogram generation
+to detections produced under these inference \code{settings_id} values.
+\code{NULL} (default) pools detections from all settings. Use this to
+generate clips for one specific inference run/configuration.}
 
 \item{n_per_species}{Integer. Number of detections to select per group
 (see \code{grouping_by}). Default 30.}

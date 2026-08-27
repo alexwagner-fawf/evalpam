@@ -10,6 +10,7 @@ sample_results_table(
   deployment_ids,
   species_ids = NULL,
   audio_file_ids = NULL,
+  settings_ids = NULL,
   grouping_by = c("species_id", "deployment_id"),
   pool
 )
@@ -36,6 +37,11 @@ logical AND.}
 supplied, only detections in these files are considered, in addition to
 the \code{deployment_ids} filter. \code{NULL} (default) applies no file
 constraint.}
+
+\item{settings_ids}{Optional integer vector of \code{settings_id} values.
+When supplied, only detections produced under these inference settings are
+considered. \code{NULL} (default) applies no settings constraint (results
+from all settings are pooled).}
 
 \item{grouping_by}{Character vector specifying columns used for grouping.
 Defaults to \code{c("species_id", "deployment_id")}.}

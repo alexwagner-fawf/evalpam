@@ -21,6 +21,10 @@
 #'   generation to detections in these audio files. \code{NULL} (default)
 #'   applies no file constraint. Files outside the selected deployments are
 #'   still excluded (the two filters intersect).
+#' @param settings_ids Integer vector or NULL. Restrict spectrogram generation
+#'   to detections produced under these inference \code{settings_id} values.
+#'   \code{NULL} (default) pools detections from all settings. Use this to
+#'   generate clips for one specific inference run/configuration.
 #' @param n_per_species Integer. Number of detections to select per group
 #'   (see \code{grouping_by}). Default 30.
 #' @param confidence_selection_mode Character. Passed to
@@ -47,6 +51,7 @@ generate_spectrograms <- function(pool,
                                   deployment_ids            = NULL,
                                   species_ids               = NULL,
                                   audio_file_ids            = NULL,
+                                  settings_ids              = NULL,
                                   n_per_species             = 30L,
                                   confidence_selection_mode = "top",
                                   grouping_by               = c("species_id", "deployment_id"),
@@ -101,6 +106,7 @@ generate_spectrograms <- function(pool,
     deployment_ids            = selected_deployments$deployment_id,
     species_ids               = species_ids,
     audio_file_ids            = audio_file_ids,
+    settings_ids              = settings_ids,
     grouping_by               = grouping_by,
     pool                      = pool
   )
@@ -113,6 +119,8 @@ generate_spectrograms <- function(pool,
         paste0("\n  species_ids filter: ", paste(species_ids, collapse = ", ")),
       if (!is.null(audio_file_ids))
         paste0("\n  audio_file_ids filter: ", paste(audio_file_ids, collapse = ", ")),
+      if (!is.null(settings_ids))
+        paste0("\n  settings_ids filter: ", paste(settings_ids, collapse = ", ")),
       ".\nCheck that import.results contains inference output matching these ",
       "deployments and any species/audio-file filters."
     )

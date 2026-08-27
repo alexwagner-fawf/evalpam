@@ -30,6 +30,11 @@
 #'   the \code{deployment_ids} filter. \code{NULL} (default) applies no file
 #'   constraint.
 #'
+#' @param settings_ids Optional integer vector of \code{settings_id} values.
+#'   When supplied, only detections produced under these inference settings are
+#'   considered. \code{NULL} (default) applies no settings constraint (results
+#'   from all settings are pooled).
+#'
 #' @param grouping_by Character vector specifying columns used for grouping.
 #'   Defaults to \code{c("species_id", "deployment_id")}.
 #'
@@ -62,6 +67,7 @@ sample_results_table <- function(confidence_selection_mode = "top",
                                              deployment_ids,
                                              species_ids = NULL,
                                              audio_file_ids = NULL,
+                                             settings_ids = NULL,
                                              grouping_by = c("species_id", "deployment_id"),
                                              pool){
 
@@ -76,6 +82,7 @@ sample_results_table <- function(confidence_selection_mode = "top",
   # Normalise optional id filters: drop NAs, treat empty as "no constraint".
   species_ids    <- .normalise_id_filter(species_ids)
   audio_file_ids <- .normalise_id_filter(audio_file_ids)
+  settings_ids   <- .normalise_id_filter(settings_ids)
 
   audio_files_tbl <- dplyr::tbl(pool, DBI::Id("import", "audio_files")) |>
     dplyr::filter(.data$deployment_id %in% !!deployment_ids)
@@ -89,7 +96,15 @@ sample_results_table <- function(confidence_selection_mode = "top",
     dplyr::select(audio_file_id, deployment_id)
 
   results_query_based <- dplyr::tbl(pool, DBI::Id("import", "results")) |>
-    dplyr::select(-created_at, -settings_id) |>
+    dplyr::select(-created_at)
+
+  if (!is.null(settings_ids)) {
+    results_query_based <- results_query_based |>
+      dplyr::filter(.data$settings_id %in% !!settings_ids)
+  }
+
+  results_query_based <- results_query_based |>
+    dplyr::select(-settings_id) |>
     dplyr::inner_join(audio_files_tbl, by = "audio_file_id")
 
   if (!is.null(species_ids)) {
