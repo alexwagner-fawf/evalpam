@@ -427,12 +427,18 @@ app_server <- function(input, output, session, pool) {
       AND ast_own.user_id           = $3
   )
 "
-        done_in_groups <- DBI::dbGetQuery(
-          pool, q_done_groups,
-          params = list(target_id,
-                        as.integer(input$selected_project),
-                        res_auth$user_id)
-        )$path
+        # Degrade gracefully if the occupancy schema is missing/misconfigured
+        # (e.g. migration 44 not applied): no auto-stop rather than a broken
+        # queue. Matches the tryCatch guard on the other occupancy queries.
+        done_in_groups <- tryCatch(
+          DBI::dbGetQuery(
+            pool, q_done_groups,
+            params = list(target_id,
+                          as.integer(input$selected_project),
+                          res_auth$user_id)
+          )$path,
+          error = function(e) character(0)
+        )
         paths <- paths[!paths %in% done_in_groups]
       }
     }
@@ -1112,7 +1118,7 @@ app_server <- function(input, output, session, pool) {
 
         if (isTRUE(current_target_positive)) {
           q_just_done <- "
-            SELECT og.group_name, og.target_count,
+            SELECT og.group_id, og.group_name, og.target_count,
                    COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
                      FILTER (WHERE gt.audio_file_id IS NOT NULL) AS n_hits
             FROM import.occupancy_groups og
@@ -1149,15 +1155,53 @@ app_server <- function(input, output, session, pool) {
           )
 
           if (nrow(just_done) > 0) {
-            for (i in seq_len(nrow(just_done))) {
-              showNotification(
-                sprintf("\U0001F389 Group '%s' completed (%d/%d certain hits) \u2014 remaining clips will be skipped.",
-                        just_done$group_name[i],
-                        as.integer(just_done$n_hits[i]),
-                        as.integer(just_done$target_count[i])),
-                type = "message", duration = 7
-              )
-            }
+            completed_ids   <- as.integer(just_done$group_id)
+            completed_lines <- sprintf("\u2705 %s (%d/%d certain hits)",
+                                       just_done$group_name,
+                                       as.integer(just_done$n_hits),
+                                       as.integer(just_done$target_count))
+
+            # Paths of every clip in the just-completed group(s): the target for
+            # "skip", and the set to step over when picking the next clip.
+            completed_paths <- tryCatch(
+              DBI::dbGetQuery(pool,
+                "SELECT CAST(s.spectrogram_id AS TEXT) || '.mp3' AS path
+                 FROM import.spectrogram_groups sg
+                 JOIN import.spectrograms s USING (spectrogram_id)
+                 WHERE sg.group_id = ANY($1::bigint[])",
+                params = list(paste0("{", paste(completed_ids, collapse = ","), "}"))
+              )$path,
+              error = function(e) character(0)
+            )
+
+            grp_word <- if (length(completed_ids) > 1L) "groups" else "group"
+            shinyalert::shinyalert(
+              title = sprintf("Required verifications reached (%d %s)",
+                              length(completed_ids), grp_word),
+              text = paste0(
+                paste(completed_lines, collapse = "\n"),
+                "\n\nThe remaining clips in ", grp_word,
+                " will be skipped in the queue. Jump to the next group now?"
+              ),
+              type = "success",
+              showCancelButton = TRUE,
+              confirmButtonText = "Skip to next group",
+              cancelButtonText  = "Stay here",
+              callbackR = function(value) {
+                if (!isTRUE(value)) return(invisible(NULL))
+                # The queue has already re-filtered (save_trigger bumped above);
+                # step to the first clip that is not part of the completed group.
+                queue <- isolate(filtered_files())
+                nxt   <- setdiff(queue, completed_paths)
+                if (length(nxt) > 0) {
+                  updateSelectizeInput(session, "seq", choices = queue,
+                                       selected = nxt[[1]], server = TRUE)
+                } else {
+                  showNotification("No further groups left in the queue.",
+                                   type = "message")
+                }
+              }
+            )
           }
         }
       }

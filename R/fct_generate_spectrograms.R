@@ -25,6 +25,14 @@
 #'   to detections produced under these inference \code{settings_id} values.
 #'   \code{NULL} (default) pools detections from all settings. Use this to
 #'   generate clips for one specific inference run/configuration.
+#' @param result_ids Integer vector or NULL. Specific detection \code{result_id}
+#'   values to build clips from. Interpreted per \code{result_id_mode}.
+#'   \code{NULL} (default) applies no result-id constraint.
+#' @param result_id_mode Character, \code{"exclusive"} (default) or
+#'   \code{"prioritize"}; only relevant when \code{result_ids} is set. Passed to
+#'   \code{\link{sample_results_table}}: \code{"exclusive"} builds clips only for
+#'   the listed detections, \code{"prioritize"} builds them first and tops up
+#'   each group with other detections up to \code{n_per_species}.
 #' @param n_per_species Integer. Number of detections to select per group
 #'   (see \code{grouping_by}). Default 30.
 #' @param confidence_selection_mode Character. Passed to
@@ -52,6 +60,8 @@ generate_spectrograms <- function(pool,
                                   species_ids               = NULL,
                                   audio_file_ids            = NULL,
                                   settings_ids              = NULL,
+                                  result_ids                = NULL,
+                                  result_id_mode            = c("exclusive", "prioritize"),
                                   n_per_species             = 30L,
                                   confidence_selection_mode = "top",
                                   grouping_by               = c("species_id", "deployment_id"),
@@ -107,6 +117,8 @@ generate_spectrograms <- function(pool,
     species_ids               = species_ids,
     audio_file_ids            = audio_file_ids,
     settings_ids              = settings_ids,
+    result_ids                = result_ids,
+    result_id_mode            = match.arg(result_id_mode),
     grouping_by               = grouping_by,
     pool                      = pool
   )
@@ -121,6 +133,9 @@ generate_spectrograms <- function(pool,
         paste0("\n  audio_file_ids filter: ", paste(audio_file_ids, collapse = ", ")),
       if (!is.null(settings_ids))
         paste0("\n  settings_ids filter: ", paste(settings_ids, collapse = ", ")),
+      if (!is.null(result_ids))
+        paste0("\n  result_ids (", match.arg(result_id_mode), "): ",
+               paste(result_ids, collapse = ", ")),
       ".\nCheck that import.results contains inference output matching these ",
       "deployments and any species/audio-file filters."
     )
@@ -153,12 +168,13 @@ generate_spectrograms <- function(pool,
                                  grp$deployment_id[1L],
                                  nrow(grp)))
     build_audio_clips_db(
-      data         = grp,
-      pool         = pool,
-      padding_s    = padding_s,
-      output_dir   = output_dir,
-      export_to_db = export_to_db,
-      verbose      = FALSE,
+      data           = grp,
+      pool           = pool,
+      padding_s      = padding_s,
+      output_dir     = output_dir,
+      export_to_db   = export_to_db,
+      selection_mode = confidence_selection_mode,
+      verbose        = FALSE,
       ...
     )
   }

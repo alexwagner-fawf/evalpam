@@ -11,6 +11,8 @@ sample_results_table(
   species_ids = NULL,
   audio_file_ids = NULL,
   settings_ids = NULL,
+  result_ids = NULL,
+  result_id_mode = c("exclusive", "prioritize"),
   grouping_by = c("species_id", "deployment_id"),
   pool
 )
@@ -42,6 +44,27 @@ constraint.}
 When supplied, only detections produced under these inference settings are
 considered. \code{NULL} (default) applies no settings constraint (results
 from all settings are pooled).}
+
+\item{result_ids}{Optional integer vector of \code{result_id} values. How it
+is used depends on \code{result_id_mode}. \code{NULL} (default) applies no
+result-id constraint.}
+
+\item{result_id_mode}{Character, one of \code{"exclusive"} (default) or
+\code{"prioritize"}; only relevant when \code{result_ids} is supplied.
+\describe{
+  \item{\code{"exclusive"}}{The listed \code{result_ids} act as a hard
+    filter: rows whose \code{result_id} is not in the list are removed
+    before sampling.}
+  \item{\code{"prioritize"}}{The listed \code{result_ids} are preferred but
+    not required. Within each group the listed rows are taken first (chosen
+    via \code{confidence_selection_mode} and capped at \code{n_per_species});
+    if a group holds fewer than \code{n_per_species} listed rows, the
+    remaining slots are filled with non-listed rows using the same mode.
+    Not supported with \code{confidence_selection_mode = "stratified"}
+    (errors), because stratified sampling returns one row per confidence
+    bin and can collapse a listed set to fewer than \code{n_per_species}
+    rows, making the cap/fill behaviour ambiguous.}
+}}
 
 \item{grouping_by}{Character vector specifying columns used for grouping.
 Defaults to \code{c("species_id", "deployment_id")}.}

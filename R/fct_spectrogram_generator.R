@@ -15,6 +15,9 @@
 #' @param video_height Integer. Height of the output video.
 #' @param video_res Integer. Resolution (DPI) of the spectrogram.
 #' @param verbose Logical. Whether to show a progress bar.
+#' @param selection_mode Character. Stored on every created spectrogram in
+#'   \code{import.spectrograms.selection_mode}. One of \code{"custom"} (default),
+#'   \code{"top"}, \code{"random"} or \code{"stratified"}.
 #'
 #' @return A list with the processing status and a list of any errors encountered.
 #'
@@ -28,7 +31,11 @@
 
 build_spectrogram_db <- function(data, pool, padding_s = 5, analysis_range = 3,
                                  output_dir = "spectrograms", temp_dir = tempdir(),
-                                 video_width = 1280, video_height = 720, video_res = 144, verbose = TRUE) {
+                                 video_width = 1280, video_height = 720, video_res = 144,
+                                 verbose = TRUE, selection_mode = "custom") {
+
+  selection_mode <- match.arg(selection_mode,
+                              c("custom", "top", "random", "stratified"))
 
   if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
 
@@ -96,8 +103,9 @@ build_spectrogram_db <- function(data, pool, padding_s = 5, analysis_range = 3,
 
         insert_q <- "
           INSERT INTO import.spectrograms
-          (audio_file_id, begin_time_ms, result_id, buffer_ms, duration_ms, resolution_x, resolution_y, freq_min, freq_max)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 15000)
+          (audio_file_id, begin_time_ms, result_id, buffer_ms, duration_ms, resolution_x, resolution_y, freq_min, freq_max, selection_mode)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 15000, $8)
+          ON CONFLICT (audio_file_id, begin_time_ms, selection_mode) DO NOTHING
           RETURNING spectrogram_id
         "
         val_result_id <- if(!is.null(row$result_id) && !is.na(row$result_id)) row$result_id else NA
@@ -109,8 +117,12 @@ build_spectrogram_db <- function(data, pool, padding_s = 5, analysis_range = 3,
           actual_padding_before,
           as.integer(clip_duration),
           video_width,
-          video_height
+          video_height,
+          selection_mode
         ))
+
+        # Skip if a spectrogram for this (window, selection_mode) already exists.
+        if (nrow(spec_db) == 0) return(invisible(NULL))
         spec_id <- spec_db$spectrogram_id
 
         final_filename <- paste0(spec_id, ".mp4")
@@ -360,18 +372,30 @@ backfill_audio_blobs <- function(pool,
 #' @param export_to_db Logical. If \code{TRUE}, write the MP3 as a BYTEA blob
 #'   to \code{import.spectrograms.audio_data}.
 #'   The local file is still written to \code{output_dir} as a cache.
-#' @return A list with processing status and errors.
+#' @param selection_mode Character. Stored on every created spectrogram in
+#'   \code{import.spectrograms.selection_mode} to record how the clip was
+#'   selected. One of \code{"custom"} (default; caller-supplied set),
+#'   \code{"top"}, \code{"random"} or \code{"stratified"}. \code{generate_spectrograms()}
+#'   forwards its \code{confidence_selection_mode} here.
+#' @return A list with \code{status}, \code{errors}, and \code{n_skipped} (the
+#'   number of rows whose (window, selection_mode) clip already existed and was
+#'   left untouched via \code{ON CONFLICT DO NOTHING}).
 #' @importFrom DBI dbGetQuery dbExecute
 #' @importFrom pool poolWithTransaction
 #' @importFrom av av_audio_convert
 #' @export
 build_audio_clips_db <- function(data, pool, padding_s = 5, analysis_range = 3,
                                  output_dir = "spectrograms", verbose = TRUE,
-                                 export_to_db = FALSE) {
+                                 export_to_db = FALSE,
+                                 selection_mode = "custom") {
+
+  selection_mode <- match.arg(selection_mode,
+                              c("custom", "top", "random", "stratified"))
 
   if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
   if (verbose) pb <- utils::txtProgressBar(min = 0, max = nrow(data), style = 3)
-  errors <- list()
+  errors    <- list()
+  n_skipped <- 0L
 
   for (i in seq_len(nrow(data))) {
     row <- data[i, ]
@@ -383,7 +407,7 @@ build_audio_clips_db <- function(data, pool, padding_s = 5, analysis_range = 3,
       actual_padding_before <- start_sec_original - clip_start_sec
       clip_duration <- actual_padding_before + analysis_range + padding_s
 
-      pool::poolWithTransaction(pool, function(conn) {
+      created <- pool::poolWithTransaction(pool, function(conn) {
 
         # 2. Pfad holen
         q_path <- "
@@ -403,8 +427,9 @@ build_audio_clips_db <- function(data, pool, padding_s = 5, analysis_range = 3,
         insert_q <- "
           INSERT INTO import.spectrograms
           (audio_file_id, begin_time_ms, result_id, buffer_ms, duration_ms,
-           resolution_x, resolution_y, freq_min, freq_max)
-          VALUES ($1, $2, $3, $4, $5, 0, 0, 0, 15000)
+           resolution_x, resolution_y, freq_min, freq_max, selection_mode)
+          VALUES ($1, $2, $3, $4, $5, 0, 0, 0, 15000, $6)
+          ON CONFLICT (audio_file_id, begin_time_ms, selection_mode) DO NOTHING
           RETURNING spectrogram_id
         "
         val_result_id <- if(!is.null(row$result_id) && !is.na(row$result_id)) row$result_id else NA
@@ -414,8 +439,13 @@ build_audio_clips_db <- function(data, pool, padding_s = 5, analysis_range = 3,
           row$begin_time_ms,
           val_result_id,
           actual_padding_before,      # buffer_ms (Sekunden bis Detektion)
-          as.integer(clip_duration)   # duration_ms
+          as.integer(clip_duration),  # duration_ms
+          selection_mode
         ))
+
+        # A clip for this (window, selection_mode) already exists: skip without
+        # writing a duplicate .mp3. Return FALSE so the caller can count it.
+        if (nrow(spec_db) == 0) return(FALSE)
         spec_id <- spec_db$spectrogram_id
 
         # 4. Audio Clip (mp3) erzeugen
@@ -436,7 +466,9 @@ build_audio_clips_db <- function(data, pool, padding_s = 5, analysis_range = 3,
             params = list(list(raw_audio), spec_id)
           )
         }
+        TRUE
       })
+      if (isFALSE(created)) n_skipped <- n_skipped + 1L
     }, error = function(e) {
       errors[[length(errors) + 1]] <<- list(row_index = i, error = e$message)
     })
@@ -444,6 +476,9 @@ build_audio_clips_db <- function(data, pool, padding_s = 5, analysis_range = 3,
   }
   if (verbose) close(pb)
 
-  if(length(errors) > 0) print(errors)
-  return(list(status = "done", errors = errors))
+  if (length(errors) > 0) print(errors)
+  if (verbose && n_skipped > 0)
+    message(n_skipped, " clip(s) skipped: a spectrogram already exists for that ",
+            "(window, selection_mode).")
+  return(list(status = "done", errors = errors, n_skipped = n_skipped))
 }

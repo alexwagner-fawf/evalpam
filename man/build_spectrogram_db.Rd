@@ -14,7 +14,8 @@ build_spectrogram_db(
   video_width = 1280,
   video_height = 720,
   video_res = 144,
-  verbose = TRUE
+  verbose = TRUE,
+  selection_mode = "custom"
 )
 }
 \arguments{
@@ -38,6 +39,10 @@ build_spectrogram_db(
 \item{video_res}{Integer. Resolution (DPI) of the spectrogram.}
 
 \item{verbose}{Logical. Whether to show a progress bar.}
+
+\item{selection_mode}{Character. Stored on every created spectrogram in
+\code{import.spectrograms.selection_mode}. One of \code{"custom"} (default),
+\code{"top"}, \code{"random"} or \code{"stratified"}.}
 }
 \value{
 A list with the processing status and a list of any errors encountered.

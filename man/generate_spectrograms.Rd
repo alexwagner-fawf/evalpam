@@ -11,6 +11,8 @@ generate_spectrograms(
   species_ids = NULL,
   audio_file_ids = NULL,
   settings_ids = NULL,
+  result_ids = NULL,
+  result_id_mode = c("exclusive", "prioritize"),
   n_per_species = 30L,
   confidence_selection_mode = "top",
   grouping_by = c("species_id", "deployment_id"),
@@ -47,6 +49,16 @@ still excluded (the two filters intersect).}
 to detections produced under these inference \code{settings_id} values.
 \code{NULL} (default) pools detections from all settings. Use this to
 generate clips for one specific inference run/configuration.}
+
+\item{result_ids}{Integer vector or NULL. Specific detection \code{result_id}
+values to build clips from. Interpreted per \code{result_id_mode}.
+\code{NULL} (default) applies no result-id constraint.}
+
+\item{result_id_mode}{Character, \code{"exclusive"} (default) or
+\code{"prioritize"}; only relevant when \code{result_ids} is set. Passed to
+\code{\link{sample_results_table}}: \code{"exclusive"} builds clips only for
+the listed detections, \code{"prioritize"} builds them first and tops up
+each group with other detections up to \code{n_per_species}.}
 
 \item{n_per_species}{Integer. Number of detections to select per group
 (see \code{grouping_by}). Default 30.}

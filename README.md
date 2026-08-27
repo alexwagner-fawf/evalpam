@@ -85,4 +85,31 @@ Once you successfully finished the previous steps, the app is ready to run. You 
 
 ```r
 evalpam::run_app()
-``` 
+```
+
+## Two-phase verification workflow (screening then calibration)
+
+The runnable scripts in `inst/` are numbered in execution order. Beyond ingest
+(`01`), inference (`02`) and spectrogram generation (`03`), a two-phase
+verification pipeline is supported:
+
+- **Phase 1 — screening (with a stop criterion).** Generate `"top"`
+  (highest-confidence) clips grouped by species × location, create occupancy
+  groups with `groups_from_spectrograms(..., target_count = 2)`
+  (`inst/04_assign_occupancy_groups.R`), and verify with the occupancy filter
+  **on**. Each species × location is confirmed after 2 certain-present
+  verifications, after which its remaining clips are skipped and a pop-up offers
+  to jump to the next group.
+- **Phase 2 — calibration (no stop criterion).** For the confirmed species,
+  generate `"stratified"` clips (spread across the confidence range) and verify
+  **all** of them with the occupancy filter **off** — e.g. to fit a logistic
+  regression of manual presence on BirdNET score.
+
+Every clip is tagged in `import.spectrograms.selection_mode`
+(`top`/`random`/`stratified`/`custom`) so the two batches stay separable when
+building the modelling table. The complete, commented walk-through — including
+the SQL to list confirmed species and to assemble the calibration dataset — is
+in **`inst/05_two_phase_occupancy_workflow.R`**.
+
+> These occupancy/verification features require the database migrations
+> `42`–`47` in `inst/sql/` to be applied by a privileged (table-owner) role.

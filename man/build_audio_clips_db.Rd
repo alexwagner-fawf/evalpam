@@ -11,7 +11,8 @@ build_audio_clips_db(
   analysis_range = 3,
   output_dir = "spectrograms",
   verbose = TRUE,
-  export_to_db = FALSE
+  export_to_db = FALSE,
+  selection_mode = "custom"
 )
 }
 \arguments{
@@ -30,9 +31,17 @@ build_audio_clips_db(
 \item{export_to_db}{Logical. If \code{TRUE}, write the MP3 as a BYTEA blob
 to \code{import.spectrograms.audio_data}.
 The local file is still written to \code{output_dir} as a cache.}
+
+\item{selection_mode}{Character. Stored on every created spectrogram in
+\code{import.spectrograms.selection_mode} to record how the clip was
+selected. One of \code{"custom"} (default; caller-supplied set),
+\code{"top"}, \code{"random"} or \code{"stratified"}. \code{generate_spectrograms()}
+forwards its \code{confidence_selection_mode} here.}
 }
 \value{
-A list with processing status and errors.
+A list with \code{status}, \code{errors}, and \code{n_skipped} (the
+  number of rows whose (window, selection_mode) clip already existed and was
+  left untouched via \code{ON CONFLICT DO NOTHING}).
 }
 \description{
 Ersetzt build_spectrogram_db(). Statt Video wird nur ein Audio-Clip

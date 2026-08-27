@@ -1,5 +1,12 @@
 library(evalpam)
 
+# Generic one-shot spectrogram generation. Each clip is tagged in
+# import.spectrograms.selection_mode with the confidence_selection_mode used
+# ("top"/"random"/"stratified"), so different sampling batches stay separable.
+# For the guided screening -> calibration pipeline (phase 1 "top" WITH a stop
+# criterion, then phase 2 "stratified" WITHOUT one) see
+#   inst/05_two_phase_occupancy_workflow.R
+
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 project_id    <- 1          # filter deployments to this project (NULL = all)
 n_per_species <- 30         # detections to sample per species × deployment

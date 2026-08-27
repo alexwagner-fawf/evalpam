@@ -132,6 +132,24 @@ test_that("settings_ids is forwarded to sample_results_table", {
   expect_equal(captured, c(3L, 7L))
 })
 
+test_that("result_ids and result_id_mode are forwarded to sample_results_table", {
+  captured <- list()
+  stub(generate_spectrograms, "sf::st_read", make_deploy_sf(1))
+  stub(generate_spectrograms, "sample_results_table",
+       function(result_ids, result_id_mode, ...) {
+         captured <<- list(ids = result_ids, mode = result_id_mode)
+         make_samples()
+       })
+  stub(generate_spectrograms, "build_audio_clips_db", function(...) invisible(NULL))
+  suppressMessages(
+    generate_spectrograms(pool = list(), project_id = 1L,
+                          result_ids = c(5L, 9L), result_id_mode = "prioritize",
+                          verbose = FALSE)
+  )
+  expect_equal(captured$ids, c(5L, 9L))
+  expect_equal(captured$mode, "prioritize")
+})
+
 # --------------------------------------------------------------------------
 # 2. Deployment selection: one per location vs explicit IDs
 # --------------------------------------------------------------------------
