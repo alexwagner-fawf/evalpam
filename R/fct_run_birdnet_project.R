@@ -327,6 +327,10 @@ run_birdnet_project <- function(pool,
             password = db_credentials$password,
             fail_with_error = TRUE
           )
+          # Close the pool when this worker function returns. An open pool keeps
+          # a `later` reaping loop and live DB connections around, which prevents
+          # the worker process from going idle and can hang the run.
+          on.exit(try(pool::poolClose(worker_pool), silent = TRUE), add = TRUE)
           process_deployment_birdnet(
             deployment_id              = deployment_id,
             deployments                = deployments,
@@ -378,7 +382,12 @@ run_birdnet_project <- function(pool,
                             names(audio_files_by_dep))
     for (d in missing_keys) audio_files_by_dep[[d]] <- audio_files[0L, ]
 
-    future::plan(future::multisession, workers = n_workers)
+    # Tear the worker cluster down when this function returns. Leaving the
+    # multisession plan active keeps the PSOCK worker processes alive, which
+    # holds the parent R process open at exit (the run appears to "hang" after
+    # all deployments are done). Restore whatever plan was in effect on entry.
+    previous_plan <- future::plan(future::multisession, workers = n_workers)
+    on.exit(future::plan(previous_plan), add = TRUE)
 
     future.apply::future_mapply(
       FUN           = process_deployment_worker,

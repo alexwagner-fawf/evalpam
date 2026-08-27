@@ -31,7 +31,9 @@ upload_inference         <- TRUE  # set FALSE to do a dry run without touching t
 # ─────────────────────────────────────────────────────────────────────────────
 
 pool <- set_db_pool()
-on.exit(pool::poolClose(pool), add = TRUE)
+# `on.exit()` only fires on function exit, so at top level (Rscript / source())
+# it would never run and the open pool would hang the process at exit. Close it
+# explicitly in the finally handler around the run instead.
 
 # The two species-selection modes are mutually exclusive, so only pass the
 # spatiotemporal arguments when no explicit species_ids list is given. Passing
@@ -53,4 +55,10 @@ if (is.null(species_ids)) {
   args$species_ids <- species_ids
 }
 
-do.call(run_birdnet_project, args)
+tryCatch(
+  do.call(run_birdnet_project, args),
+  finally = {
+    pool::poolClose(pool)
+    future::plan(future::sequential)  # ensure no worker cluster lingers
+  }
+)
