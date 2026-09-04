@@ -1,4 +1,4 @@
-console.log('[evalpam] wavesurfer_init loaded — v73 — ' + new Date().toISOString());
+console.log('[evalpam] wavesurfer_init loaded — v74 — ' + new Date().toISOString());
 
 // Safari < 15 (and 15.5–18.1 partially) lack createImageBitmap, which makes
 // the vendored spectrogram plugin's drawSpectrogram() throw synchronously.

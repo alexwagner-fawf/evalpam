@@ -155,7 +155,7 @@ The layout uses a `fluidPage` with a sidebar (width = 4) and a main panel (width
 
 ### 4.4 Client-side spectrogram — `wavesurfer_init.js`
 
-The JS file (~850 lines) is embedded inline at startup to avoid browser caching stale versions during development. WaveSurfer.js and its three plugins (Spectrogram, Regions, Timeline) are served from vendored copies inside the package at `inst/app/www/wavesurfer/` and registered by `app_ui()` as a Shiny resource path (`/wslib/`). No external network request is made at runtime.
+The JS file (~850 lines) is embedded inline at startup to avoid browser caching stale versions during development. WaveSurfer.js and its three plugins (Spectrogram, Regions, Timeline) are served from vendored copies inside the package at `inst/app/wavesurfer/` and registered by `app_ui()` as a Shiny resource path (`/wslib/`). No external network request is made at runtime.
 
 **Spectrogram rendering pipeline**:
 1. WaveSurfer decodes the MP3 at the minimum sample rate required to cover `frequencyMax` (with 2.2× headroom), using a 1024-sample FFT window.
@@ -223,7 +223,7 @@ evalpam uses two separate mechanisms for protecting credentials:
 | Linux desktop (GNOME) | libsecret / GNOME Keyring | AES-256, unlocked on login |
 | Linux headless server | `keyring` file backend | AES-256, unlocked by `KEYRING_FILE_PASSWORD` env var |
 
-**WaveSurfer.js** (version 7.8.17) and its three plugins are vendored inside the package at `inst/app/www/wavesurfer/` and served locally. No JavaScript is loaded from external CDNs at runtime, eliminating the supply-chain risk of a compromised CDN delivering arbitrary code into user sessions. The pinned version is auditable in git.
+**WaveSurfer.js** (version 7.8.17) and its three plugins are vendored inside the package at `inst/app/wavesurfer/` and served locally. No JavaScript is loaded from external CDNs at runtime, eliminating the supply-chain risk of a compromised CDN delivering arbitrary code into user sessions. The pinned version is auditable in git.
 
 Non-secret connection parameters (host, port, database name, application username) are stored in `golem-config.yml` inside the installed package.
 

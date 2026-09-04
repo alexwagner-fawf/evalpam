@@ -252,9 +252,11 @@ golem_add_external_resources <- function() {
   #   )
   # )
 
-  # Serve vendored WaveSurfer files from the package; inject the base URL so
-  # the inline script can resolve the ESM imports without touching the CDN.
-  shiny::addResourcePath("wslib", app_sys("app/www/wavesurfer"))
+  # Serve vendored WaveSurfer files from the package. NB: they live OUTSIDE
+  # app/www on purpose -- bundle_resources() recurses app/www and would emit the
+  # .esm.js files as classic <script> tags ("Unexpected token 'export'"); the
+  # library must only be pulled via dynamic import() in wavesurfer_init.js.
+  shiny::addResourcePath("wslib", app_sys("app/wavesurfer"))
 
   # Inline the JS so it is always fresh — no caching, no resource-path
   # resolution issues with load_all() / app_sys().
@@ -264,7 +266,12 @@ golem_add_external_resources <- function() {
     tags$head(
       favicon(ico = "favicon_512px", ext = "png"),
       bundle_resources(path = app_sys("app/www"), app_title = "evalpam"),
-      tags$script(HTML("window._wsLibBase = '/wslib';")),
+      # Resolve the wslib base against the document URL so it works behind a
+      # reverse-proxy sub-path (e.g. shiny-server at /shiny/<user>/<app>/).
+      # An absolute "/wslib" would bypass the app prefix and 404.
+      tags$script(HTML(
+        "window._wsLibBase = new URL('wslib', document.baseURI).href.replace(/\\/$/, '');"
+      )),
       tags$script(HTML(js_content))
     )
   )
