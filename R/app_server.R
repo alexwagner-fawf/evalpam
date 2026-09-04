@@ -197,10 +197,19 @@ app_server <- function(input, output, session, pool) {
     og.target_count,
     COUNT(DISTINCT (gt.audio_file_id, gt.begin_time_ms))
       FILTER (WHERE gt.audio_file_id IS NOT NULL) AS n_hits,
-    COUNT(DISTINCT sg.spectrogram_id) AS n_total_spectrograms
+    COUNT(DISTINCT sg.spectrogram_id) AS n_total_spectrograms,
+    -- Human-readable membership, derived from the group's actual spectrograms
+    -- (works for any group_by, not just species/deployment naming).
+    string_agg(DISTINCT COALESCE(ls.species_scientific, ls.species_short,
+                                 r2.species_id::text), ', ') AS species,
+    string_agg(DISTINCT d2.deployment_name, ', ')            AS deployments
   FROM import.occupancy_groups og
   JOIN import.spectrogram_groups sg USING (group_id)
   JOIN import.spectrograms s        ON s.spectrogram_id = sg.spectrogram_id
+  LEFT JOIN import.results r2        ON r2.result_id      = s.result_id
+  LEFT JOIN public.lut_species_code ls ON ls.species_id  = r2.species_id
+  LEFT JOIN import.audio_files af2   ON af2.audio_file_id = s.audio_file_id
+  LEFT JOIN import.deployments d2    ON d2.deployment_id  = af2.deployment_id
   LEFT JOIN import.annotation_status ast
     ON ast.audio_file_id     = s.audio_file_id
    AND ast.begin_time_ms     = s.begin_time_ms
@@ -222,10 +231,23 @@ app_server <- function(input, output, session, pool) {
     )
   })
 
-  # ---- Occupancy info box ----
-  # Shows per-group progress (n_hits / target_count) and highlights which group
-  # the currently selected spectrogram belongs to. Multiple groups can light up
-  # if a spectrogram is in several groups (e.g. plot-wide + morning-only).
+  # Which occupancy groups contain the currently selected spectrogram? Reused by
+  # the compact info box and the full-table modal.
+  current_seq_groups <- reactive({
+    if (is.null(input$seq) || input$seq == "") return(integer(0))
+    spec_id <- tools::file_path_sans_ext(input$seq)
+    tryCatch(
+      DBI::dbGetQuery(pool,
+                      "SELECT group_id FROM import.spectrogram_groups WHERE spectrogram_id = $1",
+                      params = list(as.integer(spec_id)))$group_id,
+      error = function(e) integer(0)
+    )
+  })
+
+  # ---- Occupancy info box (compact) ----
+  # Shows the overall completed-group count and the progress of the group(s) the
+  # current clip belongs to. The full per-group breakdown lives in a modal table
+  # (button below) so the sidebar stays compact even with hundreds of groups.
   output$occupancy_info_ui <- renderUI({
     if (!occupancy_active()) return(NULL)
     req(input$target_species, input$target_species != "")
@@ -233,37 +255,30 @@ app_server <- function(input, output, session, pool) {
     st <- occupancy_status()
     if (is.null(st) || nrow(st) == 0) return(NULL)
 
-    # Which groups contain the currently selected spectrogram?
-    current_groups <- integer(0)
-    if (!is.null(input$seq) && input$seq != "") {
-      spec_id <- tools::file_path_sans_ext(input$seq)
-      current_groups <- tryCatch(
-        DBI::dbGetQuery(pool,
-                        "SELECT group_id FROM import.spectrogram_groups WHERE spectrogram_id = $1",
-                        params = list(as.integer(spec_id)))$group_id,
-        error = function(e) integer(0)
+    n_done <- sum(st$n_hits >= st$target_count)
+    current_groups <- current_seq_groups()
+
+    # Progress line(s) for the current clip's group(s) \u2014 the one piece of
+    # per-group detail worth keeping inline for immediate context.
+    cur_line <- NULL
+    cst <- st[st$group_id %in% current_groups, , drop = FALSE]
+    if (nrow(cst) > 0) {
+      cur_line <- tags$div(
+        style = "margin-top: 6px;",
+        lapply(seq_len(nrow(cst)), function(i) {
+          is_done <- cst$n_hits[i] >= cst$target_count[i]
+          tags$div(
+            style = sprintf("font-size: 12px; font-weight: bold; color: %s;",
+                            if (is_done) "#3c763d" else "#31708f"),
+            sprintf("%s %s: %d / %d",
+                    if (is_done) "\u2705" else "\U0001F3AF",
+                    cst$group_name[i],
+                    as.integer(cst$n_hits[i]),
+                    as.integer(cst$target_count[i]))
+          )
+        })
       )
     }
-
-    n_done <- sum(st$n_hits >= st$target_count)
-
-    group_rows <- lapply(seq_len(nrow(st)), function(i) {
-      is_current <- st$group_id[i] %in% current_groups
-      is_done    <- st$n_hits[i] >= st$target_count[i]
-      color      <- if (is_done) "#3c763d" else if (is_current) "#31708f" else "#888"
-      weight     <- if (is_current) "bold" else "normal"
-      bg         <- if (is_current) "#d9edf7" else "transparent"
-      icon_chr   <- if (is_done) "\u2705" else if (is_current) "\U0001F3AF" else "\u25CB"
-
-      tags$div(
-        style = sprintf("color: %s; font-weight: %s; font-size: 12px; padding: 2px 4px; background: %s; border-radius: 3px;",
-                        color, weight, bg),
-        sprintf("%s %s: %d / %d", icon_chr,
-                st$group_name[i],
-                as.integer(st$n_hits[i]),
-                as.integer(st$target_count[i]))
-      )
-    })
 
     div(style = "padding: 8px 12px; margin-bottom: 10px;
                  background: #fcf8e3; border-left: 4px solid #f0ad4e;
@@ -271,8 +286,78 @@ app_server <- function(input, output, session, pool) {
         icon("bullseye"),
         tags$strong(sprintf(" Occupancy: %d/%d groups completed",
                             as.integer(n_done), nrow(st))),
-        tags$div(style = "margin-top: 6px;", group_rows)
+        cur_line,
+        tags$div(
+          style = "margin-top: 8px;",
+          actionButton(
+            "show_occupancy_table",
+            label = sprintf("Alle Gruppen anzeigen / Show all groups (%d)", nrow(st)),
+            icon  = icon("table"),
+            class = "btn-xs btn-default",
+            style = "width: 100%;"
+          )
+        )
     )
+  })
+
+  # ---- Occupancy groups: full table in a modal ----
+  occupancy_table_df <- reactive({
+    st <- occupancy_status()
+    if (is.null(st) || nrow(st) == 0) return(NULL)
+    cur <- current_seq_groups()
+    is_done <- st$n_hits >= st$target_count
+    status  <- ifelse(is_done, "\u2705 Done",
+               ifelse(st$group_id %in% cur, "\U0001F3AF Current", "\u25CB Open"))
+    data.frame(
+      Status       = status,
+      Species      = ifelse(is.na(st$species) | st$species == "",
+                            "—", st$species),
+      Deployment   = ifelse(is.na(st$deployments) | st$deployments == "",
+                            "—", st$deployments),
+      Group        = st$group_name,
+      Hits         = as.integer(st$n_hits),
+      Target       = as.integer(st$target_count),
+      Spectrograms = as.integer(st$n_total_spectrograms),
+      check.names  = FALSE,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  output$occupancy_table <- DT::renderDT({
+    df <- occupancy_table_df()
+    validate(need(!is.null(df) && nrow(df) > 0, "No occupancy groups for this selection."))
+    DT::datatable(
+      df,
+      rownames = FALSE,
+      filter   = "top",
+      options  = list(
+        pageLength = 15,
+        lengthMenu = list(c(15, 30, 100, -1), c("15", "30", "100", "All")),
+        order      = list(list(0, "asc"), list(3, "asc"))  # Status, then Group
+      )
+    ) |>
+      DT::formatStyle(
+        "Status",
+        target = "row",
+        backgroundColor = DT::styleEqual(
+          c("\u2705 Done", "\U0001F3AF Current"),
+          c("#dff0d8", "#d9edf7"),
+          default = "white"
+        )
+      )
+  })
+
+  observeEvent(input$show_occupancy_table, {
+    st <- occupancy_status()
+    n_done <- if (is.null(st)) 0L else sum(st$n_hits >= st$target_count)
+    showModal(modalDialog(
+      title     = sprintf("Occupancy-Gruppen / Occupancy groups \u2014 %d/%d completed",
+                          as.integer(n_done), if (is.null(st)) 0L else nrow(st)),
+      size      = "l",
+      easyClose = TRUE,
+      footer    = modalButton("Schlie\u00DFen / Close"),
+      DT::DTOutput("occupancy_table")
+    ))
   })
 
   # ---- 4c. Target species selector (filter + sort) ----
