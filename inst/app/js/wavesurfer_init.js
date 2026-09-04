@@ -301,17 +301,24 @@ $(document).on('shiny:connected', async function() {
   // ---- Laden ----
   let _lastLoad = {url: null, freq_max: null, freq_min: null, t: 0};
   Shiny.addCustomMessageHandler('ws_load', function(msg) {
-    // Deduplicate: R's observer can fire 2-3× for the same recording when
-    // debounced freq inputs settle. Drop any repeat within 1500 ms.
+    // Audio arrives as a base64 data URL (msg.audio) streamed over the
+    // websocket; msg.url is kept only as a legacy fallback. Dedupe on the clip
+    // id (comparing full data URLs would be huge and pointless): R's observer
+    // can fire 2-3× for the same recording when debounced freq inputs settle.
+    const src   = msg.audio || msg.url;
+    const specId = (msg.spec_id != null)
+      ? String(msg.spec_id)
+      : (src ? (src.match(/\/(\d+)(?:_f\d+_\d+)?\.mp3$/) || [])[1] || null : null);
+
     const now = Date.now();
-    if (msg.url === _lastLoad.url &&
+    if (specId != null && specId === _lastLoad.url &&
         msg.freq_max === _lastLoad.freq_max &&
         msg.freq_min === _lastLoad.freq_min &&
         now - _lastLoad.t < 1500) {
       console.log('[evalpam] ws_load deduped');
       return;
     }
-    _lastLoad = {url: msg.url, freq_max: msg.freq_max, freq_min: msg.freq_min, t: now};
+    _lastLoad = {url: specId, freq_max: msg.freq_max, freq_min: msg.freq_min, t: now};
     _firstNormDone = false;
 
     if (_loopSource) { try { _loopSource.stop(); } catch(e) {} _loopSource = null; }
@@ -322,9 +329,9 @@ $(document).on('shiny:connected', async function() {
       regionsPlugin = null;
     }
 
-    // Extract numeric spectrogram ID from URLs like "spectrograms/123.mp3"
-    // or filtered variants like "spectrograms/123_f0_10000.mp3".
-    currentSpecId = msg.url ? (msg.url.match(/\/(\d+)(?:_f\d+_\d+)?\.mp3$/) || [])[1] || null : null;
+    // Numeric spectrogram ID: prefer the explicit msg.spec_id, else parse a
+    // legacy URL like "spectrograms/123.mp3" / "spectrograms/123_f0_10000.mp3".
+    currentSpecId = specId;
 
     regionsPlugin = RegionsPlugin.create();
 
@@ -831,7 +838,12 @@ $(document).on('shiny:connected', async function() {
     // canvas drags — causing spurious seek + play/pause toggles that
     // interrupted selection playback. Use the ▶ button instead.
 
-    ws.load(msg.url);
+    ws.load(src);
+  });
+
+  // Surface a server-side load failure instead of an endless blank spinner.
+  Shiny.addCustomMessageHandler('ws_error', function(msg) {
+    console.error('[evalpam] ws_load failed for spec', msg && msg.spec_id, '-', msg && msg.message);
   });
 
   Shiny.addCustomMessageHandler('ws_play',  function(_msg) { if (ws) ws.play(); });

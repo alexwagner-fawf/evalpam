@@ -335,7 +335,9 @@ app_server <- function(input, output, session, pool) {
       SELECT
         CAST(s.spectrogram_id AS TEXT) || '.mp3' AS path,
         r.species_id,
-        r.confidence AS score
+        r.confidence AS score,
+        s.selection_mode,
+        af.deployment_id
       FROM import.results r
       JOIN import.audio_files af ON af.audio_file_id = r.audio_file_id
       JOIN import.spectrograms s ON s.audio_file_id = r.audio_file_id
@@ -348,35 +350,52 @@ app_server <- function(input, output, session, pool) {
       dplyr::arrange(species_id, dplyr::desc(score))
   })
 
-  # ---- Filtered file list (the queue) ----
-  # Applies, in order: target-species filter, score threshold, "already done"
-  # filter, and the occupancy auto-stop. Returns a vector of spectrogram paths.
-  filtered_files <- reactive({
+  # Populate the deployment filter (in the Queue-filters menu) for the selected
+  # project. Choices reset when the project changes.
+  observeEvent(input$selected_project, {
+    deps <- tryCatch(
+      DBI::dbGetQuery(pool,
+        "SELECT deployment_id, deployment_name
+           FROM import.deployments
+          WHERE project_id = $1
+          ORDER BY deployment_name",
+        params = list(input$selected_project)),
+      error = function(e) data.frame(deployment_id = integer(0),
+                                     deployment_name = character(0))
+    )
+    choices <- stats::setNames(as.character(deps$deployment_id),
+                               deps$deployment_name)
+    shinyWidgets::updatePickerInput(session, "filter_deployment",
+                                    choices = choices, selected = character(0))
+  })
+
+  # Debounced score threshold. The numericInput fires on every keystroke; without
+  # this, each intermediate digit would recompute the queue (and re-push up to
+  # 10k selectize options). 300 ms lets the user finish typing. It no longer
+  # touches the DB (see queue_base), so this is purely a client-side predicate.
+  score_start_d <- debounce(reactive(input$score_start), 300)
+
+  # ---- Queue base (DB-heavy, cached) ----
+  # Everything that requires a database round-trip: the target-species filter,
+  # the "already done by others" filter, and the occupancy auto-stop. Depends
+  # ONLY on the project, the queue species, the occupancy toggle, and
+  # save_trigger (bumped after each save). It deliberately does NOT depend on the
+  # score slider or the queue-filter menu, so moving the slider or toggling a
+  # filter costs zero DB queries. Returns the surviving rows of project_data().
+  queue_base <- reactive({
     save_trigger()  # Manual invalidation dependency
     req(project_data())
     df <- project_data()
 
     target_id <- current_target_species()
+    if (is.null(target_id)) return(df)
 
-    if (!is.null(target_id)) {
-      df <- df |>
-        dplyr::filter(species_id == target_id) |>
-        dplyr::arrange(dplyr::desc(score))
-    }
+    df <- df |> dplyr::filter(species_id == target_id)
 
-    if (!is.null(input$score_start)) {
-      # DB stores confidence as smallint (raw_conf * 10000); the slider is 0-1.
-      score_threshold <- as.integer(input$score_start * 10000)
-      df <- df |> dplyr::filter(score <= score_threshold)
-    }
-
-    paths <- unique(df$path)
-
-    # "Already done" filter: hide spectrograms that were already saved against
-    # the current queue species. target_species_id in annotation_status now
+    # "Already done" filter: hide spectrograms already saved against the current
+    # queue species by *other* users. target_species_id in annotation_status now
     # always means "queue/task species" (binary OR full-with-queue).
-    if (!is.null(target_id)) {
-      q_done <- "
+    q_done <- "
     SELECT CAST(s.spectrogram_id AS TEXT) || '.mp3' AS path
     FROM import.annotation_status ast
     JOIN import.spectrograms s
@@ -385,14 +404,14 @@ app_server <- function(input, output, session, pool) {
     WHERE ast.target_species_id = $1
       AND ast.user_id <> $2
   "
-      done <- DBI::dbGetQuery(pool, q_done,
-                              params = list(target_id, res_auth$user_id))$path
-      paths <- paths[!paths %in% done]
+    done <- DBI::dbGetQuery(pool, q_done,
+                            params = list(target_id, res_auth$user_id))$path
+    df <- df |> dplyr::filter(!path %in% done)
 
-      # Occupancy auto-stop: drop spectrograms whose group has already reached
-      # its target_count of certain hits for this queue species.
-      if (occupancy_active()) {
-        q_done_groups <- "
+    # Occupancy auto-stop: drop spectrograms whose group has already reached
+    # its target_count of certain hits for this queue species.
+    if (occupancy_active()) {
+      q_done_groups <- "
   SELECT DISTINCT CAST(s.spectrogram_id AS TEXT) || '.mp3' AS path
   FROM import.spectrogram_groups sg
   JOIN import.spectrograms s USING (spectrogram_id)
@@ -439,11 +458,38 @@ app_server <- function(input, output, session, pool) {
           )$path,
           error = function(e) character(0)
         )
-        paths <- paths[!paths %in% done_in_groups]
-      }
+      df <- df |> dplyr::filter(!path %in% done_in_groups)
     }
 
-    paths
+    df
+  })
+
+  # ---- Filtered file list (the queue) ----
+  # Cheap, client-side row predicates applied to the cached queue_base(): the
+  # score threshold and the optional "Queue filters" menu (sampling mode +
+  # deployment). None of these touch the DB, so slider/filter interactions are
+  # instant. Returns a vector of spectrogram paths, order preserved.
+  filtered_files <- reactive({
+    df <- queue_base()
+
+    score_val <- score_start_d()
+    if (!is.null(score_val)) {
+      # DB stores confidence as smallint (raw_conf * 10000); the slider is 0-1.
+      score_threshold <- as.integer(score_val * 10000)
+      df <- df |> dplyr::filter(score <= score_threshold)
+    }
+
+    # Optional queue filters (from the collapsible "Queue filters" menu). An
+    # empty selection means "no constraint".
+    if (length(input$filter_selection_mode) > 0) {
+      df <- df |> dplyr::filter(selection_mode %in% input$filter_selection_mode)
+    }
+    if (length(input$filter_deployment) > 0) {
+      dep_ids <- as.integer(input$filter_deployment)
+      df <- df |> dplyr::filter(deployment_id %in% dep_ids)
+    }
+
+    unique(df$path)
   })
 
   # Full metadata for the current spectrogram and the one immediately after it
@@ -491,24 +537,36 @@ app_server <- function(input, output, session, pool) {
       dplyr::arrange(species_id, dplyr::desc(score))
   })
 
-  # Sync the selectizeInput with the current filtered list. Keeps the current
-  # selection if it's still in the list; otherwise jumps to the first entry.
-  observe({
-    choices <- filtered_files()
-    current <- isolate(input$seq)
-
-    # Welche Pfade sind bereits eigene Saves? Die sollen kein Default-Auswahlziel sein.
-    my_done <- tryCatch(
+  # Paths the current user has already annotated, scoped to the active project.
+  # Used only to pick a sensible default selection (skip my own saves), not to
+  # hide them. Cached on (save_trigger, project, user) so it is not re-queried on
+  # every score-slider / filter tick — and project-scoped so it no longer scans
+  # the user's annotations across all projects.
+  my_done_paths <- reactive({
+    save_trigger()
+    req(input$selected_project, res_auth$user_id)
+    tryCatch(
       DBI::dbGetQuery(pool,
                       "SELECT CAST(s.spectrogram_id AS TEXT) || '.mp3' AS path
        FROM import.annotation_status ast
        JOIN import.spectrograms s
          ON ast.audio_file_id = s.audio_file_id
         AND ast.begin_time_ms = s.begin_time_ms
-       WHERE ast.user_id = $1",
-                      params = list(res_auth$user_id))$path,
+       JOIN import.audio_files af ON af.audio_file_id = s.audio_file_id
+       JOIN import.deployments d  ON d.deployment_id  = af.deployment_id
+       WHERE ast.user_id = $1 AND d.project_id = $2",
+                      params = list(res_auth$user_id,
+                                    as.integer(input$selected_project)))$path,
       error = function(e) character(0)
     )
+  })
+
+  # Sync the selectizeInput with the current filtered list. Keeps the current
+  # selection if it's still in the list; otherwise jumps to the first entry.
+  observe({
+    choices <- filtered_files()
+    current <- isolate(input$seq)
+    my_done <- my_done_paths()
 
     selected <- if (!is.null(current) && current %in% choices && !(current %in% my_done)) {
       # current ist gültig UND keine eigene Bearbeitung → behalten
@@ -541,6 +599,59 @@ app_server <- function(input, output, session, pool) {
   freq_max_d <- debounce(reactive(input$freq_max_display), 600)
   freq_min_d <- debounce(reactive(input$freq_min_display), 600)
 
+  # ---- Clip bytes helper ----
+  # Returns the raw mp3 bytes for a clip ("<spectrogram_id>.mp3"), or NULL.
+  #
+  # Clips live in import.spectrograms.audio_data (BYTEA). We serve them to the
+  # browser directly over the websocket as a base64 data URL (see do_ws_load) so
+  # loading does NOT depend on a writable on-disk folder or a registered static
+  # resource path -- both of which fail silently in the shiny-server/su --login
+  # environment and were the reason clips "never loaded". The disk folder is
+  # still used as a *best-effort* cache to avoid re-fetching a blob from the DB;
+  # a missing/unwritable folder degrades to always fetching, never to failure.
+  #
+  # The cache directory honours the canonical `spectrogram_folder` env var, with
+  # a fallback to the legacy misspelling `spectogram_folder` still present in
+  # older deployments' .Renviron, then a relative "spectrograms" dir.
+  .spec_cache_dir <- function() {
+    d <- Sys.getenv("spectrogram_folder")
+    if (d == "") d <- Sys.getenv("spectogram_folder")
+    if (d == "") d <- "spectrograms"
+    d
+  }
+  get_clip_bytes <- function(seq_val) {
+    if (is.null(seq_val) || length(seq_val) != 1L ||
+        is.na(seq_val) || !nzchar(seq_val)) return(NULL)
+    spec_path  <- .spec_cache_dir()
+    local_file <- file.path(spec_path, seq_val)
+    if (file.exists(local_file)) {
+      return(tryCatch(
+        readBin(local_file, "raw", n = file.info(local_file)$size),
+        error = function(e) NULL))
+    }
+
+    spec_id  <- tools::file_path_sans_ext(seq_val)
+    blob_row <- tryCatch(
+      DBI::dbGetQuery(pool,
+                      "SELECT audio_data FROM import.spectrograms WHERE spectrogram_id = $1",
+                      params = list(as.integer(spec_id))),
+      error = function(e) NULL
+    )
+    if (is.null(blob_row) || nrow(blob_row) == 0 ||
+        is.null(blob_row$audio_data[[1]])) return(NULL)
+
+    bytes <- blob_row$audio_data[[1]]
+    # Best-effort write to the on-disk cache; never let a failure here (read-only
+    # folder, wrong CWD) stop us from serving the bytes we already have.
+    tryCatch({
+      dir.create(spec_path, showWarnings = FALSE, recursive = TRUE)
+      writeBin(bytes, local_file)
+    }, error = function(e) NULL)
+    bytes
+  }
+  # Warm the disk cache for a clip (used to prefetch the next one). Best-effort.
+  ensure_clip_cached <- function(seq_val) invisible(!is.null(get_clip_bytes(seq_val)))
+
   # ---- WaveSurfer load helper ----
   # Shared by the two observers below (seq change vs. freq change) so the
   # load logic isn't duplicated.
@@ -563,28 +674,22 @@ app_server <- function(input, output, session, pool) {
     eff_freq_max  <- min(nyquist_cap, user_freq_max)
     eff_freq_min  <- max(0L, user_freq_min)
 
-    spec_path  <- Sys.getenv("spectrogram_folder")
-    if (spec_path == "") spec_path <- "spectrograms"
-    local_file <- file.path(spec_path, seq_val)
-
-    # If the local cache is missing, fall back to the BYTEA blob in the DB.
-    if (!file.exists(local_file)) {
-      spec_id  <- tools::file_path_sans_ext(seq_val)
-      blob_row <- tryCatch(
-        DBI::dbGetQuery(pool,
-                        "SELECT audio_data FROM import.spectrograms WHERE spectrogram_id = $1",
-                        params = list(as.integer(spec_id))),
-        error = function(e) NULL
-      )
-      if (!is.null(blob_row) && nrow(blob_row) > 0 &&
-          !is.null(blob_row$audio_data[[1]])) {
-        dir.create(spec_path, showWarnings = FALSE, recursive = TRUE)
-        writeBin(blob_row$audio_data[[1]], local_file)
-      }
+    # Fetch the clip bytes (disk cache or DB blob) and stream them straight to
+    # the browser as a base64 data URL. No static resource path, no dependence
+    # on a writable folder -- this is what makes loading robust in production.
+    bytes <- get_clip_bytes(seq_val)
+    if (is.null(bytes)) {
+      session$sendCustomMessage("ws_error", list(
+        spec_id = tools::file_path_sans_ext(seq_val),
+        message = "Clip audio not found (no cached file and no DB blob)."
+      ))
+      return(invisible(NULL))
     }
+    data_url <- paste0("data:audio/mpeg;base64,", base64enc::base64encode(bytes))
 
     session$sendCustomMessage("ws_load", list(
-      url             = paste0("spectrograms/", seq_val),
+      audio           = data_url,
+      spec_id         = tools::file_path_sans_ext(seq_val),
       seek            = seek_target,
       detection_start = buffer_val,
       detection_end   = buffer_val + analysis_range,
@@ -600,6 +705,14 @@ app_server <- function(input, output, session, pool) {
     req(input$seq, clip_detail())
     do_ws_load(input$seq, isolate(freq_max_d()), isolate(freq_min_d()))
     updateSelectizeInput(session, "abiotic_sounds", selected = character(0))
+
+    # Prefetch the next clip's blob into the disk cache while the user verifies
+    # the current one, so "Save & Next" is served from disk instead of paying a
+    # fresh DB blob round-trip. isolate() keeps the queue out of this observer's
+    # dependencies (it must fire only on file change, not on every re-filter).
+    queue <- isolate(filtered_files())
+    idx   <- match(input$seq, queue)
+    if (!is.na(idx) && idx < length(queue)) ensure_clip_cached(queue[[idx + 1L]])
   })
 
   # Frequency range changed by user -> reload current recording.
@@ -619,23 +732,15 @@ app_server <- function(input, output, session, pool) {
     sel <- input$spec_selection
     req(sel$spec_id, !is.null(sel$t_start), !is.null(sel$t_end))
 
-    spec_path  <- Sys.getenv("spectrogram_folder")
-    if (spec_path == "") spec_path <- "spectrograms"
-    local_file <- file.path(spec_path, paste0(sel$spec_id, ".mp3"))
-
-    # Same DB fallback as in do_ws_load.
+    # tuneR needs a file on disk. Get the bytes (disk cache or DB blob) and
+    # ensure they are available as a readable file, using a tempfile if the
+    # cache dir is not writable.
+    bytes <- get_clip_bytes(paste0(sel$spec_id, ".mp3"))
+    if (is.null(bytes)) return()
+    local_file <- file.path(.spec_cache_dir(), paste0(sel$spec_id, ".mp3"))
     if (!file.exists(local_file)) {
-      blob_row <- tryCatch(
-        DBI::dbGetQuery(pool,
-                        "SELECT audio_data FROM import.spectrograms WHERE spectrogram_id = $1",
-                        params = list(as.integer(sel$spec_id))),
-        error = function(e) NULL
-      )
-      if (!is.null(blob_row) && nrow(blob_row) > 0 &&
-          !is.null(blob_row$audio_data[[1]])) {
-        dir.create(spec_path, showWarnings = FALSE, recursive = TRUE)
-        writeBin(blob_row$audio_data[[1]], local_file)
-      } else return()
+      local_file <- tempfile(fileext = ".mp3")
+      writeBin(bytes, local_file)
     }
 
     filtered_b64 <- tryCatch({

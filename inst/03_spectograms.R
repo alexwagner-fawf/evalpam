@@ -14,8 +14,8 @@ padding_s     <- 2          # seconds of context before/after detection
 export_to_db  <- TRUE       # upload MP3 blobs to import.spectrograms
 
 # Output directory for MP3 cache files.
-# Reads spectogram_folder from .Renviron; falls back to ./spectograms if unset.
-output_dir <- NULL  # NULL = use Sys.getenv("spectogram_folder")
+# Reads spectrogram_folder from .Renviron; falls back to ./spectrograms if unset.
+output_dir <- NULL  # NULL = use Sys.getenv("spectrogram_folder")
 
 # Optional: supply explicit deployment IDs to skip the automatic
 # "one per location" selection. NULL uses the automatic selection.

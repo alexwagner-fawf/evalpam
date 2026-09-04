@@ -7,20 +7,20 @@
 #' @noRd
 setup_renviron <- function(filepath = here::here(".Renviron"),
                            overwrite = TRUE,
-                           spectogram_folder = NA) {
+                           spectrogram_folder = NA) {
 
   if(file.exists(filepath) && !overwrite){
     message(".Renviron exists. To replace, set overwrite = TRUE")
     return(invisible(NULL))
   }
 
-  if(is.na(spectogram_folder)){
-    spectogram_folder <- file.path(dirname(filepath), "spectograms")
+  if(is.na(spectrogram_folder)){
+    spectrogram_folder <- file.path(dirname(filepath), "spectrograms")
   }
 
-  if(!dir.exists(spectogram_folder)) dir.create(spectogram_folder)
+  if(!dir.exists(spectrogram_folder)) dir.create(spectrogram_folder)
 
-  lines <- paste0("spectogram_folder=", spectogram_folder)
+  lines <- paste0("spectrogram_folder=", spectrogram_folder)
 
   writeLines(lines, con = filepath)
   readRenviron(filepath)

@@ -55,8 +55,8 @@ make_samples <- function(n = 5) {
 # 1. output_dir fallback behaviour
 # --------------------------------------------------------------------------
 
-test_that("output_dir defaults to spectogram_folder env var when set", {
-  withr::with_envvar(c(spectogram_folder = "/env/audio"), {
+test_that("output_dir defaults to spectrogram_folder env var when set", {
+  withr::with_envvar(c(spectrogram_folder = "/env/audio", spectogram_folder = ""), {
     captured_dir <- NULL
     stub(generate_spectrograms, "sf::st_read",    make_deploy_sf())
     stub(generate_spectrograms, "sample_results_table", make_samples())
@@ -76,8 +76,8 @@ test_that("output_dir defaults to spectogram_folder env var when set", {
   })
 })
 
-test_that("output_dir falls back to ./spectograms when env var is unset", {
-  withr::with_envvar(c(spectogram_folder = ""), {
+test_that("output_dir falls back to ./spectrograms when env var is unset", {
+  withr::with_envvar(c(spectrogram_folder = "", spectogram_folder = ""), {
     captured_dir <- NULL
     stub(generate_spectrograms, "sf::st_read",    make_deploy_sf())
     stub(generate_spectrograms, "sample_results_table", make_samples())
@@ -93,7 +93,7 @@ test_that("output_dir falls back to ./spectograms when env var is unset", {
       generate_spectrograms(pool = list(), project_id = 1L, export_to_db = FALSE,
                             verbose = FALSE)
     )
-    expect_match(captured_dir, "spectograms$")
+    expect_match(captured_dir, "spectrograms$")
   })
 })
 

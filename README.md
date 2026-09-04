@@ -87,6 +87,49 @@ Once you successfully finished the previous steps, the app is ready to run. You 
 evalpam::run_app()
 ```
 
+## Deploying on a headless server (Shiny Server / RStudio Connect)
+
+On a desktop, `evalpam` stores the database password in your OS keychain (via
+[`keyring`](https://r-lib.github.io/keyring/)) and reads it back automatically.
+A headless server has no interactive keychain, so `keyring` falls back to the
+`env` backend and cannot find the password — and Shiny Server launches each app
+with `su --login <run_as>`, which **strips the environment and switches `HOME`**
+to the run-as user. The result is a failed pool at startup and login errors like
+`unable to find an inherited method for 'dbGetQuery' ... 'logical'` (the pool is
+`FALSE` because no connection could be made).
+
+Because R reads the run-as user's `~/.Renviron` at startup, store the secret
+there. Use the encrypted **file** keyring backend:
+
+1. As the **run-as user** (usually `shiny`), add to `~/.Renviron`:
+
+   ```
+   KEYRING_BACKEND=file
+   KEYRING_FILE_PASSWORD=<a master password of your choice>
+   ```
+
+2. Create the keyring entry **as that same user** so the encrypted keyring file
+   is written to their home directory and can be unlocked with the master
+   password above:
+
+   ```bash
+   sudo -u shiny Rscript -e '
+     keyring::key_set_with_value(
+       service  = "evalpam",
+       username = "evalpam_user",       # your config$default$pg_user
+       password = "<the DB password>"
+     )'
+   ```
+
+   (Running the full `setup_app()` as the run-as user works too; it performs the
+   same `key_set_with_value()` step.)
+
+3. Restart Shiny Server, then verify the password resolves for that user:
+
+   ```bash
+   sudo -u shiny Rscript -e 'evalpam:::.resolve_db_password("evalpam_user")'
+   ```
+
 ## Two-phase verification workflow (screening then calibration)
 
 The runnable scripts in `inst/` are numbered in execution order. Beyond ingest
@@ -103,7 +146,10 @@ verification pipeline is supported:
 - **Phase 2 — calibration (no stop criterion).** For the confirmed species,
   generate `"stratified"` clips (spread across the confidence range) and verify
   **all** of them with the occupancy filter **off** — e.g. to fit a logistic
-  regression of manual presence on BirdNET score.
+  regression of manual presence on BirdNET score. Use the sidebar **Queue
+  filters** menu (funnel icon) to restrict the queue to `Sampling mode =
+  stratified` and a single `Deployment`, so a finished deployment can be worked
+  through in isolation.
 
 Every clip is tagged in `import.spectrograms.selection_mode`
 (`top`/`random`/`stratified`/`custom`) so the two batches stay separable when

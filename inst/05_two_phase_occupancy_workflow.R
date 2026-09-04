@@ -129,6 +129,10 @@ generate_spectrograms(
 
 # 2b. Verify in the app WITH the occupancy filter OFF (no auto-stop):
 #     evalpam::run_app()
+#     In the sidebar "Queue filters" menu (funnel icon) set Sampling mode =
+#     "stratified" (and optionally a single Deployment) so the queue shows only
+#     the phase-2 clips for the finished deployment — the phase-1 "top" clips and
+#     other deployments are filtered out.
 
 # 2c. Build the modelling table: BirdNET confidence + manual label, restricted
 #     to the phase-2 stratified clips (selection_mode tag keeps them separate

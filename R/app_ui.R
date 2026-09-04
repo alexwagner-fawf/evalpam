@@ -65,6 +65,37 @@ app_ui <- function(request) {
             status = "primary",
             right = TRUE
           ),
+
+          # Collapsible queue-filter menu. Kept in a dropdown so extra filters
+          # can be added here without inflating the sidebar. Each input is
+          # optional (empty selection = no constraint); the server reads them in
+          # filtered_files().
+          shinyWidgets::dropdownButton(
+            inputId = "queue_filters_btn",
+            tags$h5("Warteschlangen-Filter / Queue filters"),
+            shinyWidgets::pickerInput(
+              "filter_selection_mode", "Sampling-Modus / Sampling mode:",
+              choices  = c("top", "random", "stratified", "custom"),
+              multiple = TRUE,
+              options  = list(`actions-box` = TRUE,
+                              `none-selected-text` = "Alle / All")
+            ),
+            shinyWidgets::pickerInput(
+              "filter_deployment", "Deployment:",
+              choices  = character(0),   # populated server-side per project
+              multiple = TRUE,
+              options  = list(`actions-box` = TRUE, `live-search` = TRUE,
+                              `none-selected-text` = "Alle / All")
+            ),
+            circle  = FALSE,
+            status  = "default",
+            icon    = icon("filter"),
+            label   = "Filter",
+            width   = "300px",
+            tooltip = shinyWidgets::tooltipOptions(
+              title = "Warteschlangen-Filter / Queue filters")
+          ),
+
           uiOutput("occupancy_info_ui"),
           numericInput("score_start", "Scores anzeigen bis / Show scores up to:",
                        value = 1.0, min = 0, max = 1, step = 0.05),

@@ -6,6 +6,23 @@
 #' @noRd
 check_credentials_db <- function(pool) {
   function(user, password) {
+    # The pool is built once at app start (run_app -> set_db_pool). If that
+    # connection failed, set_db_pool() returns FALSE, and every query here would
+    # otherwise fail with the cryptic S4 message
+    #   "unable to find an inherited method for 'dbGetQuery' ... 'logical'".
+    # Detect that up front and give an actionable message instead.
+    if (!.pool_is_usable(pool)) {
+      message("[evalpam auth] database pool is not available (connection failed ",
+              "at app start); check DB credentials / password backend. Login for '",
+              user, "' rejected.")
+      if (isRunning())
+        shinyalert::shinyalert(
+          title = "Database unavailable",
+          text  = "The application could not connect to the database. Please contact your admin.",
+          type  = "error"
+        )
+      return(list(result = FALSE, user = user))
+    }
     tryCatch(
       .check_credentials_impl(pool, user, password),
       error = function(e) {
@@ -14,6 +31,13 @@ check_credentials_db <- function(pool) {
       }
     )
   }
+}
+
+# TRUE only for a live pool/connection object. set_db_pool() returns FALSE on
+# failure, so anything that is not a valid DBI-ish object is treated as unusable.
+.pool_is_usable <- function(pool) {
+  if (is.null(pool) || is.logical(pool)) return(FALSE)
+  isTRUE(tryCatch(pool::dbIsValid(pool), error = function(e) FALSE))
 }
 
 .check_credentials_impl <- function(pool, user, password) {

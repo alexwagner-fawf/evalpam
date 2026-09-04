@@ -44,8 +44,8 @@
 #' @param padding_s Numeric. Seconds of audio context before and after the
 #'   detection window. Default 2.
 #' @param output_dir Character or NULL. Directory for MP3 cache files. If
-#'   \code{NULL} (default), reads the \code{spectogram_folder} environment
-#'   variable, falling back to \code{./spectograms}.
+#'   \code{NULL} (default), reads the \code{spectrogram_folder} environment
+#'   variable, falling back to \code{./spectrograms}.
 #' @param export_to_db Logical. Upload MP3 blobs to \code{import.spectrograms}.
 #'   Default \code{TRUE}.
 #' @param verbose Logical. Print progress messages. Default \code{TRUE}.
@@ -72,8 +72,11 @@ generate_spectrograms <- function(pool,
                                   ...) {
 
   if (is.null(output_dir)) {
-    env_dir <- Sys.getenv("spectogram_folder")
-    output_dir <- if (nzchar(env_dir)) env_dir else file.path(getwd(), "spectograms")
+    # Correct spelling first; tolerate the legacy misspelling in older .Renviron
+    # files so existing deployments keep resolving their configured folder.
+    env_dir <- Sys.getenv("spectrogram_folder")
+    if (!nzchar(env_dir)) env_dir <- Sys.getenv("spectogram_folder")
+    output_dir <- if (nzchar(env_dir)) env_dir else file.path(getwd(), "spectrograms")
   }
 
   # ── Select deployments ───────────────────────────────────────────────────────
