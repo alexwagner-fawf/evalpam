@@ -225,21 +225,20 @@ app_ui <- function(request) {
 golem_add_external_resources <- function() {
   add_resource_path("www", app_sys("app/www"))
 
-  # --- FIX: Pfad sicherstellen ---
-  # 1. Versuche Umgebungsvariable
+  # --- Spektrogramm-Ordner als statische Ressource freigeben ---
+  # Muss denselben Ordner treffen, in den der Server die Clips schreibt
+  # (.spec_cache_dir() in app_server.R): kanonisch `spectrogram_folder`, mit
+  # Fallback auf die alte Schreibweise `spectogram_folder`, dann relativ.
   spec_path <- Sys.getenv("spectrogram_folder")
+  if (spec_path == "") spec_path <- Sys.getenv("spectogram_folder")
+  if (spec_path == "") spec_path <- "spectrograms"
 
-  # 2. Wenn leer, nimm den lokalen Ordner im Projekt
-  if (spec_path == "") {
-    spec_path <- "spectrograms" # Oder der absolute Pfad: "C:/MeinProjekt/spectrograms"
-  }
-
-  # 3. Prüfen und freigeben
-  if (dir.exists(spec_path)) {
-    add_resource_path("spectrograms", spec_path)
-  } else {
-    warning(paste("ACHTUNG: Spektrogramm-Ordner nicht gefunden unter:", spec_path))
-  }
+  # Ordner anlegen und IMMER registrieren. Vorher wurde die Ressource nur bei
+  # existierendem Ordner registriert -- fehlte er beim App-Start (typisch auf
+  # shiny-server), lieferte der Browser für jeden Clip 404 und nichts lud.
+  tryCatch(dir.create(spec_path, showWarnings = FALSE, recursive = TRUE),
+           error = function(e) NULL)
+  add_resource_path("spectrograms", normalizePath(spec_path, mustWork = FALSE))
   # =====================================================================
   # ALTERNATIVE: Interactive JS Spectrogram (Wavesurfer)
   # Currently deactivated in favor of the more stable MP4 video version.

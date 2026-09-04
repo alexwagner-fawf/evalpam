@@ -674,9 +674,8 @@ app_server <- function(input, output, session, pool) {
     eff_freq_max  <- min(nyquist_cap, user_freq_max)
     eff_freq_min  <- max(0L, user_freq_min)
 
-    # Fetch the clip bytes (disk cache or DB blob) and stream them straight to
-    # the browser as a base64 data URL. No static resource path, no dependence
-    # on a writable folder -- this is what makes loading robust in production.
+    # Make sure the clip's bytes are available (disk cache or DB blob). This
+    # writes the mp3 into the cache folder when it comes from the DB.
     bytes <- get_clip_bytes(seq_val)
     if (is.null(bytes)) {
       session$sendCustomMessage("ws_error", list(
@@ -685,10 +684,8 @@ app_server <- function(input, output, session, pool) {
       ))
       return(invisible(NULL))
     }
-    data_url <- paste0("data:audio/mpeg;base64,", base64enc::base64encode(bytes))
 
-    session$sendCustomMessage("ws_load", list(
-      audio           = data_url,
+    msg <- list(
       spec_id         = tools::file_path_sans_ext(seq_val),
       seek            = seek_target,
       detection_start = buffer_val,
@@ -696,7 +693,21 @@ app_server <- function(input, output, session, pool) {
       freq_max        = eff_freq_max,
       freq_min        = eff_freq_min,
       sample_rate     = if (is.na(sr)) 44100L else as.integer(sr)
-    ))
+    )
+
+    # Prefer serving the clip as a static file from the registered "spectrograms"
+    # resource path (proven, cheap, browser-cacheable). Fall back to a base64
+    # data URL over the websocket only when the file is not on disk (e.g. the
+    # cache folder is not writable), so loading still works in locked-down
+    # deployments. Note: the JS side loads msg.url when present, else msg.audio.
+    local_file <- file.path(.spec_cache_dir(), seq_val)
+    if (file.exists(local_file)) {
+      msg$url <- paste0("spectrograms/", seq_val)
+    } else {
+      msg$audio <- paste0("data:audio/mpeg;base64,", base64enc::base64encode(bytes))
+    }
+
+    session$sendCustomMessage("ws_load", msg)
   }
 
   # Recording changed -> load immediately. isolate() on the freq values keeps

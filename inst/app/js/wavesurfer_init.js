@@ -1,4 +1,4 @@
-console.log('[evalpam] wavesurfer_init loaded — v72 — ' + new Date().toISOString());
+console.log('[evalpam] wavesurfer_init loaded — v73 — ' + new Date().toISOString());
 
 // Safari < 15 (and 15.5–18.1 partially) lack createImageBitmap, which makes
 // the vendored spectrogram plugin's drawSpectrogram() throw synchronously.
@@ -301,11 +301,12 @@ $(document).on('shiny:connected', async function() {
   // ---- Laden ----
   let _lastLoad = {url: null, freq_max: null, freq_min: null, t: 0};
   Shiny.addCustomMessageHandler('ws_load', function(msg) {
-    // Audio arrives as a base64 data URL (msg.audio) streamed over the
-    // websocket; msg.url is kept only as a legacy fallback. Dedupe on the clip
+    // Clip source: a static file URL (msg.url, served from the "spectrograms"
+    // resource path) is preferred; msg.audio (base64 data URL over the
+    // websocket) is the fallback when the clip isn't on disk. Dedupe on the clip
     // id (comparing full data URLs would be huge and pointless): R's observer
     // can fire 2-3× for the same recording when debounced freq inputs settle.
-    const src   = msg.audio || msg.url;
+    const src   = msg.url || msg.audio;
     const specId = (msg.spec_id != null)
       ? String(msg.spec_id)
       : (src ? (src.match(/\/(\d+)(?:_f\d+_\d+)?\.mp3$/) || [])[1] || null : null);
@@ -552,6 +553,12 @@ $(document).on('shiny:connected', async function() {
       });
       specObs.observe(root, { childList: true, subtree: true });
     })();
+
+    // Surface load/decode failures instead of an endless blank canvas.
+    ws.on('error', function(err) {
+      console.error('[evalpam] wavesurfer error for spec', currentSpecId,
+                    '(src:', (src || '').slice(0, 40) + '…)', '-', err);
+    });
 
     ws.on('ready', function() {
       // Guard against stale ready events from a destroyed instance.
@@ -838,7 +845,13 @@ $(document).on('shiny:connected', async function() {
     // canvas drags — causing spurious seek + play/pause toggles that
     // interrupted selection playback. Use the ▶ button instead.
 
-    ws.load(src);
+    if (!src) {
+      console.error('[evalpam] ws_load: no audio source in message', msg);
+      return;
+    }
+    Promise.resolve(ws.load(src)).catch(function(err) {
+      console.error('[evalpam] ws.load failed for spec', currentSpecId, '-', err);
+    });
   });
 
   // Surface a server-side load failure instead of an endless blank spinner.
