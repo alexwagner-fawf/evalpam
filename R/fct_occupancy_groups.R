@@ -450,3 +450,221 @@ groups_from_spectrograms <- function(pool, project_id, group_by,
   }
   invisible(plan)
 }
+
+
+#' Delete occupancy groups and their member spectrograms
+#'
+#' Given a set of `group_id`s, removes:
+#'   1. every spectrogram that is a member of those groups
+#'      (`import.spectrograms`, incl. its `audio_data` blob),
+#'   2. the `import.spectrogram_groups` membership rows, and
+#'   3. the `import.occupancy_groups` rows themselves.
+#'
+#' Steps (2) happen automatically via `ON DELETE CASCADE`: deleting a
+#' spectrogram cascades its membership rows (FK on `spectrogram_id`), and
+#' deleting a group cascades any remaining membership rows (FK on `group_id`).
+#' The whole operation runs in a single transaction, so it is all-or-nothing.
+#'
+#' NOTE — shared membership: a spectrogram that also belongs to a group *outside*
+#' `group_ids` is still deleted (a spectrogram cannot be removed from one group
+#' but kept in another — deleting the row removes it everywhere). Set
+#' `spectrograms_only_in_these_groups = TRUE` to instead keep any spectrogram
+#' that is also a member of some other group, deleting only the ones exclusive to
+#' `group_ids`.
+#'
+#' NOTE — annotations: `import.annotation_status` and
+#' `import.ground_truth_annotations` are keyed by `(audio_file_id,
+#' begin_time_ms)`, not `spectrogram_id`, so they are NOT touched. Any
+#' annotations made against the deleted clips' time windows remain.
+#'
+#' @param pool A DBI pool.
+#' @param group_ids Integer vector of `import.occupancy_groups.group_id` to
+#'   delete. Unknown ids are ignored.
+#' @param spectrograms_only_in_these_groups Logical. If `TRUE`, only delete
+#'   spectrograms whose group membership is entirely within `group_ids` (spare
+#'   clips shared with other groups). Default `FALSE` (delete all member clips).
+#' @param delete_cache_files Logical. Also best-effort remove the on-disk MP3
+#'   cache files `<spectrogram_folder>/<spectrogram_id>.mp3` for the deleted
+#'   clips. Default `FALSE`.
+#' @param verbose Logical. Emit a summary message. Default `TRUE`.
+#'
+#' @return Invisibly, a list with `groups_deleted`, `spectrograms_deleted`, and
+#'   `spectrogram_ids` (the ids removed).
+#' @export
+remove_occupancy_groups <- function(pool, group_ids,
+                                    spectrograms_only_in_these_groups = FALSE,
+                                    delete_cache_files = FALSE,
+                                    verbose = TRUE) {
+  group_ids <- as.integer(group_ids[!is.na(group_ids)])
+  group_ids <- unique(group_ids)
+  if (length(group_ids) == 0L) {
+    if (verbose) message("remove_occupancy_groups: no group_ids given, nothing to do.")
+    return(invisible(list(groups_deleted = 0L,
+                          spectrograms_deleted = 0L,
+                          spectrogram_ids = integer(0))))
+  }
+  gid_arr <- .bigint_array(group_ids)
+
+  res <- pool::poolWithTransaction(pool, function(conn) {
+    # 1. Which spectrograms will be deleted. By default every member of the
+    #    target groups; with `spectrograms_only_in_these_groups`, only those with
+    #    no membership in any group outside `group_ids`.
+    spec_q <- if (isTRUE(spectrograms_only_in_these_groups)) {
+      "SELECT sg.spectrogram_id
+         FROM import.spectrogram_groups sg
+        WHERE sg.group_id = ANY($1::bigint[])
+          AND NOT EXISTS (
+            SELECT 1 FROM import.spectrogram_groups sg2
+             WHERE sg2.spectrogram_id = sg.spectrogram_id
+               AND sg2.group_id <> ALL($1::bigint[])
+          )
+        GROUP BY sg.spectrogram_id"
+    } else {
+      "SELECT DISTINCT spectrogram_id
+         FROM import.spectrogram_groups
+        WHERE group_id = ANY($1::bigint[])"
+    }
+    spec_ids <- DBI::dbGetQuery(conn, spec_q,
+                                params = list(gid_arr))$spectrogram_id
+    spec_ids <- as.integer(spec_ids)
+
+    # 2. Delete the spectrograms (cascades their spectrogram_groups rows and
+    #    drops the audio_data blobs).
+    n_spec <- 0L
+    if (length(spec_ids) > 0L) {
+      n_spec <- DBI::dbExecute(conn,
+        "DELETE FROM import.spectrograms WHERE spectrogram_id = ANY($1::bigint[])",
+        params = list(.bigint_array(spec_ids)))
+    }
+
+    # 3. Delete the groups (cascades any remaining spectrogram_groups rows).
+    n_grp <- DBI::dbExecute(conn,
+      "DELETE FROM import.occupancy_groups WHERE group_id = ANY($1::bigint[])",
+      params = list(gid_arr))
+
+    list(groups_deleted = as.integer(n_grp),
+         spectrograms_deleted = as.integer(n_spec),
+         spectrogram_ids = spec_ids)
+  })
+
+  # 4. Optional best-effort disk-cache cleanup (outside the transaction).
+  if (isTRUE(delete_cache_files) && length(res$spectrogram_ids) > 0L) {
+    dir <- Sys.getenv("spectrogram_folder")
+    if (dir == "") dir <- Sys.getenv("spectogram_folder")   # legacy misspelling
+    if (dir == "") dir <- "spectrograms"
+    files <- file.path(dir, paste0(res$spectrogram_ids, ".mp3"))
+    existing <- files[file.exists(files)]
+    if (length(existing) > 0L)
+      suppressWarnings(file.remove(existing))
+  }
+
+  if (verbose) {
+    message("remove_occupancy_groups: deleted ", res$groups_deleted,
+            " group(s) and ", res$spectrograms_deleted, " spectrogram(s).")
+  }
+  invisible(res)
+}
+
+
+# ---------------------------------------------------------------------------
+# Internal: resolve a target spectrogram set from explicit ids and/or the
+# members of occupancy groups. Returns a unique integer vector.
+# ---------------------------------------------------------------------------
+.resolve_spectrogram_ids <- function(pool, spectrogram_ids = NULL, group_ids = NULL) {
+  ids <- integer(0)
+  if (!is.null(spectrogram_ids))
+    ids <- c(ids, as.integer(spectrogram_ids))
+  group_ids <- as.integer(group_ids[!is.na(group_ids)])
+  if (length(group_ids) > 0L) {
+    g <- DBI::dbGetQuery(pool,
+      "SELECT DISTINCT spectrogram_id
+         FROM import.spectrogram_groups
+        WHERE group_id = ANY($1::bigint[])",
+      params = list(.bigint_array(group_ids)))$spectrogram_id
+    ids <- c(ids, as.integer(g))
+  }
+  unique(ids[!is.na(ids)])
+}
+
+
+#' Remove only the audio blob from spectrograms
+#'
+#' Sets \code{import.spectrograms.audio_data = NULL} for the target spectrograms,
+#' leaving every other column (and the rows themselves, their group memberships
+#' and annotations) intact. This frees the (out-of-line TOAST) blob storage while
+#' keeping enough metadata to regenerate the exact clip later with
+#' \code{\link{regenerate_spectrogram_blobs}}.
+#'
+#' Targets are the union of \code{spectrogram_ids} and the member spectrograms of
+#' \code{group_ids} (supply either or both).
+#'
+#' @param pool A DBI pool.
+#' @param spectrogram_ids Integer vector of spectrogram ids (optional).
+#' @param group_ids Integer vector of occupancy group ids whose member
+#'   spectrograms should be cleared (optional).
+#' @param verbose Logical. Emit a summary message. Default \code{TRUE}.
+#'
+#' @return Invisibly, a list with \code{blobs_removed} (rows actually cleared)
+#'   and \code{spectrogram_ids} (the full target set).
+#' @export
+remove_spectrogram_blobs <- function(pool, spectrogram_ids = NULL,
+                                     group_ids = NULL, verbose = TRUE) {
+  ids <- .resolve_spectrogram_ids(pool, spectrogram_ids, group_ids)
+  if (length(ids) == 0L) {
+    if (verbose) message("remove_spectrogram_blobs: no target spectrograms, nothing to do.")
+    return(invisible(list(blobs_removed = 0L, spectrogram_ids = integer(0))))
+  }
+  n <- DBI::dbExecute(pool,
+    "UPDATE import.spectrograms
+        SET audio_data = NULL
+      WHERE spectrogram_id = ANY($1::bigint[])
+        AND audio_data IS NOT NULL",
+    params = list(.bigint_array(ids)))
+  if (verbose)
+    message("remove_spectrogram_blobs: cleared audio_data on ", n,
+            " of ", length(ids), " target spectrogram(s).")
+  invisible(list(blobs_removed = as.integer(n), spectrogram_ids = ids))
+}
+
+
+#' Regenerate spectrogram audio blobs from the spectrogram table
+#'
+#' Reverses \code{\link{remove_spectrogram_blobs}} exactly: for spectrograms
+#' whose \code{audio_data} is currently \code{NULL}, re-extracts the identical
+#' MP3 clip from the source recording using only the metadata already stored on
+#' the row (\code{audio_file_id} -> \code{deployment_path}/\code{relative_path},
+#' \code{begin_time_ms}, \code{buffer_ms}, \code{duration_ms}) and writes it back
+#' to \code{import.spectrograms.audio_data}. Delegates the extraction to
+#' \code{\link{backfill_audio_blobs}}.
+#'
+#' Targets are the union of \code{spectrogram_ids} and the member spectrograms of
+#' \code{group_ids}; with neither supplied, ALL rows with \code{audio_data IS
+#' NULL} are regenerated (the \code{backfill_audio_blobs()} default). Rows that
+#' still hold a blob are left untouched -- to force a refresh, remove the blob
+#' first with \code{remove_spectrogram_blobs()}.
+#'
+#' @param pool A DBI pool.
+#' @param spectrogram_ids Integer vector of spectrogram ids (optional).
+#' @param group_ids Integer vector of occupancy group ids whose member
+#'   spectrograms should be regenerated (optional).
+#' @param output_dir Character or \code{NULL}. If given, each MP3 is also written
+#'   to \code{<output_dir>/<spectrogram_id>.mp3} (on-disk cache).
+#' @param verbose Logical. Show a progress bar. Default \code{TRUE}.
+#'
+#' @return Invisibly, the \code{backfill_audio_blobs()} result list
+#'   (\code{n_ok}, \code{n_skipped}, \code{n_error}, \code{errors}).
+#' @export
+regenerate_spectrogram_blobs <- function(pool, spectrogram_ids = NULL,
+                                         group_ids = NULL, output_dir = NULL,
+                                         verbose = TRUE) {
+  ids <- .resolve_spectrogram_ids(pool, spectrogram_ids, group_ids)
+  # If the caller named nothing, fall back to backfill's "all NULL rows" mode.
+  target <- if (length(ids) == 0L &&
+                is.null(spectrogram_ids) && is.null(group_ids)) NULL else ids
+  if (length(ids) == 0L && !is.null(target)) {
+    if (verbose) message("regenerate_spectrogram_blobs: no target spectrograms, nothing to do.")
+    return(invisible(list(n_ok = 0L, n_skipped = 0L, n_error = 0L, errors = list())))
+  }
+  backfill_audio_blobs(pool, spectrogram_ids = target,
+                       output_dir = output_dir, verbose = verbose)
+}

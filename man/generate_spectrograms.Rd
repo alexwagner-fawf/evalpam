@@ -75,8 +75,8 @@ or \code{"stratified"}. Default \code{"top"}.}
 detection window. Default 2.}
 
 \item{output_dir}{Character or NULL. Directory for MP3 cache files. If
-\code{NULL} (default), reads the \code{spectogram_folder} environment
-variable, falling back to \code{./spectograms}.}
+\code{NULL} (default), reads the \code{spectrogram_folder} environment
+variable, falling back to \code{./spectrograms}.}
 
 \item{export_to_db}{Logical. Upload MP3 blobs to \code{import.spectrograms}.
 Default \code{TRUE}.}

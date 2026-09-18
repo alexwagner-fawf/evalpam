@@ -278,30 +278,35 @@ backfill_audio_blobs <- function(pool,
   errors    <- list()
 
   # ── 2. Process row by row ────────────────────────────────────────────────
+  # NB: counters are updated in this frame with `<-` based on the value the
+  # tryCatch RETURNS. Updating them with `<<-` from inside the tryCatch
+  # expression would target the package namespace (the expression runs in this
+  # frame, so `<<-` looks one level up), leaving the locals at 0. A missing file
+  # uses `next`, not `return()` -- `return()` inside the expression would exit
+  # the whole function on the first missing source, aborting the batch.
   for (i in seq_len(n_total)) {
     row <- rows[i, ]
 
-    result <- tryCatch({
+    # Reconstruct clip boundaries from stored values.
+    # buffer_ms and duration_ms were inserted in seconds (see build_audio_clips_db).
+    clip_start_s    <- max(0, as.numeric(row$begin_time_ms) / 1000 - as.numeric(row$buffer_ms))
+    clip_duration_s <- as.numeric(row$duration_ms)
 
-      # Reconstruct clip boundaries from stored values.
-      # buffer_ms and duration_ms were inserted in seconds (see build_audio_clips_db).
-      clip_start_s <- as.numeric(row$begin_time_ms) / 1000 - as.numeric(row$buffer_ms)
-      clip_start_s <- max(0, clip_start_s)
-      clip_duration_s <- as.numeric(row$duration_ms)
+    rel_clean <- sub("^[/\\\\]+", "", row$relative_path)
+    full_path <- file.path(row$deployment_path, rel_clean)
 
-      rel_clean <- sub("^[/\\\\]+", "", row$relative_path)
-      full_path <- file.path(row$deployment_path, rel_clean)
+    if (!file.exists(full_path)) {
+      n_skipped <- n_skipped + 1L
+      errors[[length(errors) + 1L]] <- list(
+        spectrogram_id = row$spectrogram_id,
+        type  = "file_not_found",
+        error = paste("Source audio not found:", full_path)
+      )
+      if (verbose) utils::setTxtProgressBar(pb, i)
+      next
+    }
 
-      if (!file.exists(full_path)) {
-        n_skipped <<- n_skipped + 1L
-        errors[[length(errors) + 1L]] <<- list(
-          spectrogram_id = row$spectrogram_id,
-          type  = "file_not_found",
-          error = paste("Source audio not found:", full_path)
-        )
-        return("skipped")
-      }
-
+    ok <- tryCatch({
       tmp_mp3 <- tempfile(fileext = ".mp3")
       on.exit(if (file.exists(tmp_mp3)) file.remove(tmp_mp3), add = TRUE)
 
@@ -324,8 +329,8 @@ backfill_audio_blobs <- function(pool,
         file.copy(tmp_mp3, disk_path, overwrite = TRUE)
       }
 
-      n_ok <<- n_ok + 1L
-      "ok"
+      if (file.exists(tmp_mp3)) file.remove(tmp_mp3)
+      TRUE
 
     }, error = function(e) {
       errors[[length(errors) + 1L]] <<- list(
@@ -333,8 +338,10 @@ backfill_audio_blobs <- function(pool,
         type  = "error",
         error = conditionMessage(e)
       )
-      "error"
+      FALSE
     })
+
+    if (isTRUE(ok)) n_ok <- n_ok + 1L
 
     if (verbose) utils::setTxtProgressBar(pb, i)
   }
