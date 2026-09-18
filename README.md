@@ -87,6 +87,37 @@ Once you successfully finished the previous steps, the app is ready to run. You 
 evalpam::run_app()
 ```
 
+## Development mode (fully-populated dummy database)
+
+For development and testing you can build a self-contained dummy database that
+populates **every** table with realistic sample data (two projects — one in
+full-segmentation mode, one in binary/occupancy mode — plus deployments, audio
+files, BirdNET detections, spectrogram clips with playable MP3 audio, occupancy
+groups, annotation status, and ground truth). It never touches production: it
+creates its own database `evalpam_dev_db` owned by a dedicated `evalpam_dev`
+role, and leaves the `default` golem profile, keychain entry and `.Renviron`
+untouched.
+
+```bash
+# from the package root; needs a local Postgres superuser (default postgres/postgres)
+# and ffmpeg on PATH (for the playable clip audio).
+Rscript inst/dev/setup_dev_db.R
+```
+
+Then run the app against it by activating the `dev` config profile:
+
+```r
+Sys.setenv(GOLEM_CONFIG_ACTIVE = "dev")
+evalpam::run_app()
+```
+
+Log in with any seeded user — the password equals the username: `admin/admin`,
+`birder1/birder1`, `birder2/birder2`. `admin` sees both projects; `birder1` is
+assigned to the binary project (where Amsel @ Forest_A is already completed, to
+demonstrate the occupancy auto-stop). Re-run the script any time to reset the
+dummy data. The seed itself lives in `inst/sql/99_seed_dummy_data.sql` and is
+also what `setup_app(initialize_db = TRUE, dummy = TRUE)` loads.
+
 ## Deploying on a headless server (Shiny Server / RStudio Connect)
 
 On a desktop, `evalpam` stores the database password in your OS keychain (via

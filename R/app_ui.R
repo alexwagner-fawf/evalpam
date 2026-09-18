@@ -80,13 +80,14 @@ app_ui <- function(request) {
               options  = list(`actions-box` = TRUE,
                               `none-selected-text` = "Alle / All")
             ),
-            shinyWidgets::pickerInput(
-              "filter_deployment", "Deployment:",
-              choices  = character(0),   # populated server-side per project
-              multiple = TRUE,
-              options  = list(`actions-box` = TRUE, `live-search` = TRUE,
-                              `none-selected-text` = "Alle / All")
-            ),
+            # Rendered server-side (uiOutput) rather than updated via
+            # updatePickerInput(): in shinyWidgets 0.9.0 updating a pickerInput
+            # that was created with empty choices leaves the dropdown empty, so
+            # the deployment list never appeared. Building it fresh per project
+            # in output$filter_deployment_ui avoids that entirely.
+            uiOutput("filter_deployment_ui"),
+            numericInput("score_start", "Scores anzeigen bis / Show scores up to:",
+                         value = 1.0, min = 0, max = 1, step = 0.05),
             circle  = FALSE,
             status  = "default",
             icon    = icon("filter"),
@@ -97,8 +98,6 @@ app_ui <- function(request) {
           ),
 
           uiOutput("occupancy_info_ui"),
-          numericInput("score_start", "Scores anzeigen bis / Show scores up to:",
-                       value = 1.0, min = 0, max = 1, step = 0.05),
           selectizeInput("seq", "Sequenz / File:", choices = character(0), options = list(maxOptions = 10000)),
 
           # Info-Boxen (Task & Warnungen)

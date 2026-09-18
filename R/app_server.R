@@ -40,6 +40,48 @@ app_server <- function(input, output, session, pool) {
   # `occupancy_status()` and similar reactives.
   save_trigger <- reactiveVal(0L)
 
+  # Occupancy groups the user has explicitly chosen to keep working past their
+  # target_count (per-group override of the auto-stop). Session-scoped: a set of
+  # group_ids that queue_base() will NOT auto-remove even once "done". Every
+  # other group still auto-stops. Lets the user oversample one group without
+  # turning off occupancy filtering wholesale (which would re-open every group
+  # and blur the record of what was intentionally continued).
+  continued_groups <- reactiveVal(integer(0))
+  # Subset of continued_groups that may be AUTO-finished: groups that still had
+  # unworked clips when continued ("continue to add more"). A group reopened
+  # while already fully classified is an EDIT session -- it is NOT in this set,
+  # so a re-save while editing never auto-closes it; only a manual Finish does.
+  continue_autofinish <- reactiveVal(integer(0))
+  # Reset continuations when the project changes (a continued group belongs to
+  # one project/species, so it should not carry over to a different project).
+  observeEvent(input$selected_project, {
+    continued_groups(integer(0))
+    continue_autofinish(integer(0))
+  }, ignoreInit = TRUE)
+
+  # Unworked (unannotated for the queue species) clip count per group, as a
+  # named vector keyed by group_id. Used to decide continue-vs-edit and labels.
+  .group_unworked <- function(group_ids, target_id) {
+    if (length(group_ids) == 0 || is.null(target_id))
+      return(stats::setNames(integer(0), character(0)))
+    res <- tryCatch(
+      DBI::dbGetQuery(pool, "
+        SELECT og.group_id,
+               COUNT(*) FILTER (WHERE ast.status_id IS NULL) AS n_unworked
+        FROM import.occupancy_groups og
+        JOIN import.spectrogram_groups sg USING (group_id)
+        JOIN import.spectrograms s ON s.spectrogram_id = sg.spectrogram_id
+        LEFT JOIN import.annotation_status ast
+          ON ast.audio_file_id     = s.audio_file_id
+         AND ast.begin_time_ms     = s.begin_time_ms
+         AND ast.target_species_id = $2
+        WHERE og.group_id = ANY($1::bigint[])
+        GROUP BY og.group_id",
+        params = list(paste0("{", paste(group_ids, collapse = ","), "}"), target_id)),
+      error = function(e) data.frame(group_id = integer(0), n_unworked = integer(0)))
+    stats::setNames(as.integer(res$n_unworked), as.character(res$group_id))
+  }
+
   # ---- 2. Load Metadata (Species, Behavior, Certainty, Abiotic Sounds) ----
 
   # A) Species whitelist for the current project (driven by settings_species)
@@ -222,6 +264,18 @@ app_server <- function(input, output, session, pool) {
    AND gt.certainty_id       = 1
    AND gt.is_present         = TRUE
   WHERE og.project_id = $1
+    -- Only groups relevant to the selected queue species. Groups are built per
+    -- species (x deployment/time), so a group belongs to one species; hits are
+    -- counted for $2, and counting a *different* species' group against $2 always
+    -- yields 0. Without this filter the box lists every project group and the
+    -- completed count collapses to 0 whenever the target species changes.
+    AND og.group_id IN (
+      SELECT sgx.group_id
+      FROM import.spectrogram_groups sgx
+      JOIN import.spectrograms sx ON sx.spectrogram_id = sgx.spectrogram_id
+      JOIN import.results rx      ON rx.result_id       = sx.result_id
+      WHERE rx.species_id = $2
+    )
   GROUP BY og.group_id, og.group_name, og.target_count
   ORDER BY og.group_name"
     tryCatch(
@@ -304,10 +358,14 @@ app_server <- function(input, output, session, pool) {
   occupancy_table_df <- reactive({
     st <- occupancy_status()
     if (is.null(st) || nrow(st) == 0) return(NULL)
-    cur <- current_seq_groups()
+    cur  <- current_seq_groups()
+    cont <- continued_groups()
     is_done <- st$n_hits >= st$target_count
-    status  <- ifelse(is_done, "\u2705 Done",
-               ifelse(st$group_id %in% cur, "\U0001F3AF Current", "\u25CB Open"))
+    # "Continued" takes precedence over "Done": the group met its target but the
+    # user chose to keep working it (Hits then exceeds Target in the row).
+    status  <- ifelse(st$group_id %in% cont, "\u25B6 Continued",
+               ifelse(is_done, "\u2705 Done",
+               ifelse(st$group_id %in% cur, "\U0001F3AF Current", "\u25CB Open")))
     data.frame(
       Status       = status,
       Species      = ifelse(is.na(st$species) | st$species == "",
@@ -340,22 +398,144 @@ app_server <- function(input, output, session, pool) {
         "Status",
         target = "row",
         backgroundColor = DT::styleEqual(
-          c("\u2705 Done", "\U0001F3AF Current"),
-          c("#dff0d8", "#d9edf7"),
+          c("\u2705 Done", "\U0001F3AF Current", "\u25b6 Continued"),
+          c("#dff0d8", "#d9edf7", "#fcf8e3"),
           default = "white"
         )
       )
   })
 
+  # Control (inside the occupancy modal) to Continue a completed group past its
+  # target, or Finish (mark done) one that is being continued. Session-scoped.
+  output$occupancy_continue_ui <- renderUI({
+    st <- occupancy_status()
+    if (is.null(st) || nrow(st) == 0) return(NULL)
+    done <- st[st$n_hits >= st$target_count, , drop = FALSE]
+    if (nrow(done) == 0)
+      return(tags$p(tags$small("No completed groups yet \u2014 nothing to continue.")))
+
+    done_ids <- as.integer(done$group_id)
+    cont_ids <- intersect(continued_groups(), done_ids)   # currently continued
+    open_ids <- setdiff(done_ids, cont_ids)               # done, not continued
+
+    # Unworked-clip count per group. A group with clips left is "continue to add
+    # more"; a fully-classified group can still be REOPENED to edit its existing
+    # annotations -- both are offered, labelled differently.
+    unworked <- .group_unworked(done_ids, current_target_species())
+    n_uw <- function(id) { v <- unworked[[as.character(id)]]; if (is.null(v)) 0L else v }
+    lbl <- function(ids) stats::setNames(as.integer(ids), vapply(ids, function(id) {
+      base <- done$group_name[match(id, done_ids)]
+      if (n_uw(id) > 0) sprintf("%s (%d clip(s) left)", base, n_uw(id))
+      else sprintf("%s (fully classified \u2014 reopen to edit)", base)
+    }, character(1)))
+
+    # Finish section: only the groups currently being continued.
+    finish_block <- if (length(cont_ids) > 0) tagList(
+      shinyWidgets::pickerInput(
+        "finish_groups_sel", "Continued groups \u2014 finish (mark done):",
+        choices = lbl(cont_ids), multiple = TRUE, selected = cont_ids,
+        options = list(`actions-box` = TRUE, `none-selected-text` = "None / Keine")),
+      actionButton("finish_continue_groups", "Finish selected (mark done)",
+                   icon = icon("check"), class = "btn-sm btn-success"),
+      tags$hr(style = "margin: 8px 0;")
+    )
+
+    # Continue/reopen section: every completed group not yet continued, whether
+    # it has clips left to work or is fully classified (reopen to edit).
+    continue_block <- if (length(open_ids) > 0) tagList(
+      shinyWidgets::pickerInput(
+        "continue_groups_sel", "Completed groups \u2014 continue past minimum / reopen to edit:",
+        choices = lbl(open_ids), multiple = TRUE, selected = character(0),
+        options = list(`actions-box` = TRUE, `none-selected-text` = "None / Keine")),
+      actionButton("apply_continue_groups", "Continue / reopen selected",
+                   icon = icon("play"), class = "btn-sm btn-primary")
+    ) else tags$p(tags$small("All completed groups are already being continued."))
+
+    div(style = "margin-bottom: 10px; padding: 8px 10px; background: #f5f5f5; border-radius: 4px;",
+      finish_block, continue_block,
+      tags$small(style = "display:block; margin-top:6px; color:#666;",
+        "A group with clips left auto-finishes once you annotate them all. A fully-classified group reopened for editing stays open until you press Finish.")
+    )
+  })
+
+  observeEvent(input$apply_continue_groups, {
+    sel <- as.integer(input$continue_groups_sel)
+    if (length(sel) == 0) return()
+    continued_groups(union(continued_groups(), sel))
+    # Only groups that still have unworked clips are eligible for auto-finish;
+    # fully-classified reopen-to-edit groups close only on manual Finish.
+    uw <- .group_unworked(sel, current_target_species())
+    add_af <- sel[vapply(sel, function(i) isTRUE(uw[[as.character(i)]] > 0), logical(1))]
+    if (length(add_af) > 0)
+      continue_autofinish(union(continue_autofinish(), add_af))
+    n_edit <- length(sel) - length(add_af)
+    showNotification(
+      sprintf("Reopened %d group(s)%s.", length(sel),
+              if (n_edit > 0) sprintf(" (%d for editing)", n_edit) else ""),
+      type = "message", duration = 4)
+  })
+
+  observeEvent(input$finish_continue_groups, {
+    sel <- as.integer(input$finish_groups_sel)
+    if (length(sel) == 0) return()
+    continued_groups(setdiff(continued_groups(), sel))
+    continue_autofinish(setdiff(continue_autofinish(), sel))
+    showNotification(sprintf("Finished %d group(s) \u2014 marked done.", length(sel)),
+                     type = "message", duration = 4)
+  })
+
+  # Auto-finish: a continued group whose every member clip has been annotated
+  # (for the queue species) has nothing left to oversample, so drop it from
+  # continued_groups -> it reverts to "Done" and its clips leave the queue.
+  # Triggered by a SAVE only (not by continued_groups() changing) so that merely
+  # pressing "Continue" never triggers an immediate finish.
+  observeEvent(save_trigger(), {
+    # Only groups continued while they still had unworked clips are eligible;
+    # reopen-to-edit groups (not in continue_autofinish) are never auto-closed.
+    keep <- intersect(isolate(continued_groups()), isolate(continue_autofinish()))
+    if (length(keep) == 0) return()
+    target_id <- current_target_species()
+    if (is.null(target_id)) return()
+    exhausted <- tryCatch(
+      DBI::dbGetQuery(pool, "
+        SELECT og.group_id
+        FROM import.occupancy_groups og
+        JOIN import.spectrogram_groups sg USING (group_id)
+        JOIN import.spectrograms s ON s.spectrogram_id = sg.spectrogram_id
+        LEFT JOIN import.annotation_status ast
+          ON ast.audio_file_id     = s.audio_file_id
+         AND ast.begin_time_ms     = s.begin_time_ms
+         AND ast.target_species_id = $2
+        WHERE og.group_id = ANY($1::bigint[])
+        GROUP BY og.group_id
+        HAVING COUNT(*) FILTER (WHERE ast.status_id IS NULL) = 0",
+        params = list(paste0("{", paste(keep, collapse = ","), "}"), target_id)
+      )$group_id,
+      error = function(e) integer(0)
+    )
+    if (length(exhausted) > 0) {
+      exhausted <- as.integer(exhausted)
+      continued_groups(setdiff(isolate(continued_groups()), exhausted))
+      continue_autofinish(setdiff(isolate(continue_autofinish()), exhausted))
+      showNotification(
+        sprintf("Finished %d fully-annotated group(s) \u2014 marked done.",
+                length(exhausted)),
+        type = "message", duration = 5)
+    }
+  }, ignoreInit = TRUE)
+
   observeEvent(input$show_occupancy_table, {
     st <- occupancy_status()
     n_done <- if (is.null(st)) 0L else sum(st$n_hits >= st$target_count)
+    n_cont <- length(continued_groups())
     showModal(modalDialog(
-      title     = sprintf("Occupancy-Gruppen / Occupancy groups \u2014 %d/%d completed",
-                          as.integer(n_done), if (is.null(st)) 0L else nrow(st)),
+      title     = sprintf("Occupancy-Gruppen / Occupancy groups \u2014 %d/%d completed%s",
+                          as.integer(n_done), if (is.null(st)) 0L else nrow(st),
+                          if (n_cont > 0) sprintf(", %d continued", n_cont) else ""),
       size      = "l",
       easyClose = TRUE,
       footer    = modalButton("Schlie\u00DFen / Close"),
+      uiOutput("occupancy_continue_ui"),
       DT::DTOutput("occupancy_table")
     ))
   })
@@ -422,12 +602,21 @@ app_server <- function(input, output, session, pool) {
         r.species_id,
         r.confidence AS score,
         s.selection_mode,
-        af.deployment_id
+        af.deployment_id,
+        sg.group_id
       FROM import.results r
       JOIN import.audio_files af ON af.audio_file_id = r.audio_file_id
       JOIN import.spectrograms s ON s.audio_file_id = r.audio_file_id
                                 AND s.begin_time_ms = r.begin_time_ms
       JOIN import.deployments d  ON af.deployment_id = d.deployment_id
+      -- Occupancy-group membership (one group per clip in the usual case; MIN
+      -- keeps it single-valued if a clip ever belongs to several groups). Used
+      -- to keep a group's clips contiguous in the queue (see queue_base).
+      LEFT JOIN (
+        SELECT spectrogram_id, MIN(group_id) AS group_id
+        FROM import.spectrogram_groups
+        GROUP BY spectrogram_id
+      ) sg ON sg.spectrogram_id = s.spectrogram_id
       WHERE d.project_id = $1
       ORDER BY af.relative_path, r.begin_time_ms
     "
@@ -435,9 +624,12 @@ app_server <- function(input, output, session, pool) {
       dplyr::arrange(species_id, dplyr::desc(score))
   })
 
-  # Populate the deployment filter (in the Queue-filters menu) for the selected
-  # project. Choices reset when the project changes.
-  observeEvent(input$selected_project, {
+  # Deployment filter (in the Queue-filters menu) for the selected project.
+  # Rendered server-side so the pickerInput is created fresh with the correct
+  # choices every time the project changes. (updatePickerInput on a picker that
+  # started with empty choices does not populate it in shinyWidgets 0.9.0.)
+  output$filter_deployment_ui <- renderUI({
+    req(input$selected_project)
     deps <- tryCatch(
       DBI::dbGetQuery(pool,
         "SELECT deployment_id, deployment_name
@@ -450,8 +642,13 @@ app_server <- function(input, output, session, pool) {
     )
     choices <- stats::setNames(as.character(deps$deployment_id),
                                deps$deployment_name)
-    shinyWidgets::updatePickerInput(session, "filter_deployment",
-                                    choices = choices, selected = character(0))
+    shinyWidgets::pickerInput(
+      "filter_deployment", "Deployment:",
+      choices  = choices,
+      multiple = TRUE,
+      options  = list(`actions-box` = TRUE, `live-search` = TRUE,
+                      `none-selected-text` = "Alle / All")
+    )
   })
 
   # Debounced score threshold. The numericInput fires on every keystroke; without
@@ -469,6 +666,12 @@ app_server <- function(input, output, session, pool) {
   # filter costs zero DB queries. Returns the surviving rows of project_data().
   queue_base <- reactive({
     save_trigger()  # Manual invalidation dependency
+    # Read the occupancy toggle up front so it is ALWAYS a dependency of
+    # queue_base -- flipping the "Occupancy-Auto-Stopp" switch then re-runs this
+    # reactive and re-filters the queue immediately. (Previously it was only read
+    # inside the target-species branch below, so on some paths toggling the
+    # switch did not invalidate the queue.)
+    occ_on <- occupancy_active()
     req(project_data())
     df <- project_data()
 
@@ -495,7 +698,7 @@ app_server <- function(input, output, session, pool) {
 
     # Occupancy auto-stop: drop spectrograms whose group has already reached
     # its target_count of certain hits for this queue species.
-    if (occupancy_active()) {
+    if (occ_on) {
       q_done_groups <- "
   SELECT DISTINCT CAST(s.spectrogram_id AS TEXT) || '.mp3' AS path
   FROM import.spectrogram_groups sg
@@ -522,28 +725,33 @@ app_server <- function(input, output, session, pool) {
              FILTER (WHERE gt.audio_file_id IS NOT NULL)
            >= og.target_count
   )
-  -- Keep my own annotated clips visible so I can review / correct them.
-  AND NOT EXISTS (
-    SELECT 1 FROM import.annotation_status ast_own
-    WHERE ast_own.audio_file_id     = s.audio_file_id
-      AND ast_own.begin_time_ms     = s.begin_time_ms
-      AND ast_own.target_species_id = $1
-      AND ast_own.user_id           = $3
-  )
 "
-        # Degrade gracefully if the occupancy schema is missing/misconfigured
-        # (e.g. migration 44 not applied): no auto-stop rather than a broken
-        # queue. Matches the tryCatch guard on the other occupancy queries.
+        # Once a group reaches its target we drop ALL of its clips from the
+        # queue, including the ones the current user annotated: a finished group
+        # should disappear from the selectize menu entirely (no leftover
+        # sequences to scroll past). Degrade gracefully if the occupancy schema
+        # is missing/misconfigured (e.g. migration 44 not applied): no auto-stop
+        # rather than a broken queue.
         done_in_groups <- tryCatch(
           DBI::dbGetQuery(
             pool, q_done_groups,
             params = list(target_id,
-                          as.integer(input$selected_project),
-                          res_auth$user_id)
+                          as.integer(input$selected_project))
           )$path,
           error = function(e) character(0)
         )
-      df <- df |> dplyr::filter(!path %in% done_in_groups)
+      # Drop finished-group clips, EXCEPT for groups the user chose to continue
+      # past their target (continued_groups): those stay in the queue so the
+      # user can keep oversampling them while every other done group is removed.
+      keep_open <- continued_groups()
+      df <- df |> dplyr::filter(!(path %in% done_in_groups) |
+                                  (!is.na(group_id) & group_id %in% keep_open))
+
+      # Keep an occupancy group's clips contiguous and ordered by confidence, so
+      # "Save & Next" works one group to completion (highest-score clips first)
+      # before moving to the next group, instead of hopping between groups.
+      # Clips not in any group (group_id NA) sort last.
+      df <- df |> dplyr::arrange(is.na(group_id), group_id, dplyr::desc(score))
     }
 
     df
@@ -1381,25 +1589,46 @@ app_server <- function(input, output, session, pool) {
                               length(completed_ids), grp_word),
               text = paste0(
                 paste(completed_lines, collapse = "\n"),
-                "\n\nThe remaining clips in ", grp_word,
-                " will be skipped in the queue. Jump to the next group now?"
+                "\n\nBy default the remaining clips in ", grp_word,
+                " are skipped. Move on, or keep annotating this ", grp_word,
+                " past the minimum?"
               ),
               type = "success",
               showCancelButton = TRUE,
               confirmButtonText = "Skip to next group",
-              cancelButtonText  = "Stay here",
+              cancelButtonText  = paste0("Continue this ", grp_word),
               callbackR = function(value) {
-                if (!isTRUE(value)) return(invisible(NULL))
-                # The queue has already re-filtered (save_trigger bumped above);
-                # step to the first clip that is not part of the completed group.
-                queue <- isolate(filtered_files())
-                nxt   <- setdiff(queue, completed_paths)
-                if (length(nxt) > 0) {
-                  updateSelectizeInput(session, "seq", choices = queue,
-                                       selected = nxt[[1]], server = TRUE)
+                if (isTRUE(value)) {
+                  # Skip: the queue already re-filtered (save_trigger bumped
+                  # above); step to the first clip outside the completed group.
+                  queue <- isolate(filtered_files())
+                  nxt   <- setdiff(queue, completed_paths)
+                  if (length(nxt) > 0) {
+                    updateSelectizeInput(session, "seq", choices = queue,
+                                         selected = nxt[[1]], server = TRUE)
+                  } else {
+                    showNotification("No further groups left in the queue.",
+                                     type = "message")
+                  }
                 } else {
-                  showNotification("No further groups left in the queue.",
-                                   type = "message")
+                  # Continue: mark the just-completed group(s) as "keep open" so
+                  # queue_base() stops auto-removing them. The queue re-includes
+                  # their unworked clips (over-target hits are recorded as such
+                  # in the occupancy table). Every other group still auto-stops.
+                  continued_groups(union(continued_groups(), completed_ids))
+                  # Groups continued here still have unworked clips (they just
+                  # reached target with clips to spare), so they auto-finish once
+                  # those remaining clips are annotated.
+                  uw <- .group_unworked(completed_ids, target_species_val)
+                  elig <- completed_ids[vapply(completed_ids,
+                    function(i) isTRUE(uw[[as.character(i)]] > 0), logical(1))]
+                  if (length(elig) > 0)
+                    continue_autofinish(union(continue_autofinish(), elig))
+                  showNotification(
+                    sprintf("Continuing %d %s past the minimum — over-target hits are tracked in the occupancy table.",
+                            length(completed_ids), grp_word),
+                    type = "message", duration = 6
+                  )
                 }
               }
             )
