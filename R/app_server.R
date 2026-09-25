@@ -811,6 +811,7 @@ app_server <- function(input, output, session, pool) {
     DBI::dbGetQuery(pool, "
       SELECT
         r.result_id,
+        r.settings_id,
         r.confidence AS score,
         CAST(r.begin_time_ms AS FLOAT) / 1000.0 AS start,
         CAST(r.end_time_ms   AS FLOAT) / 1000.0 AS end_sec,
@@ -839,6 +840,22 @@ app_server <- function(input, output, session, pool) {
           OR CAST(s.spectrogram_id AS TEXT) || '.mp3' = $3)
       ORDER BY af.relative_path, r.begin_time_ms
     ", params = list(input$selected_project, cur_path, nxt_path)) |>
+      # The spectrograms join above is deliberately on the time window rather
+      # than on result_id, so this reactive lists EVERY detection in the clip
+      # (that is what the BirdNET detections table is for). import.results is
+      # unique on (audio_file_id, settings_id, begin_time_ms, end_time_ms,
+      # species_id), so a species can only appear twice in one window when it
+      # came from two different inference runs.
+      #
+      # Collapse rows that agree on species AND confidence into one, but keep
+      # every contributing settings_id in `settings` so the annotator can see
+      # WHY a detection has several sources instead of just seeing it listed
+      # twice. Rows for the same species that DIFFER in confidence stay
+      # separate: two runs genuinely disagreeing is information, not noise.
+      dplyr::group_by(path, species_id, score) |>
+      dplyr::mutate(settings = paste(sort(unique(settings_id)), collapse = ", ")) |>
+      dplyr::slice_head(n = 1) |>
+      dplyr::ungroup() |>
       dplyr::arrange(species_id, dplyr::desc(score))
   })
 
@@ -1354,8 +1371,11 @@ app_server <- function(input, output, session, pool) {
       # confidence is stored as smallint = round(raw * 1000); see the schema
       # comment in 41_create_data_tables.sql and the writer in
       # fct_birdnet_process_deployment.R.
+      # `settings` lists every inference run that produced this detection, so a
+      # species appearing on more than one row is self-explanatory rather than
+      # looking like a duplicate (see clip_detail()).
       dplyr::mutate(prediction = labs, score = score / 1000) |>
-      dplyr::select(prediction, score, start, end_sec)
+      dplyr::select(prediction, score, settings, start, end_sec)
 
     DT::datatable(df_show, options = list(dom = "t", pageLength = 5)) |>
       DT::formatRound("score", 2)
