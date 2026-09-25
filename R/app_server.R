@@ -774,11 +774,13 @@ app_server <- function(input, output, session, pool) {
 
     score_val <- score_start_d()
     if (!is.null(score_val)) {
-      # DB stores confidence as smallint (raw_conf * 10000); the slider is 0-1.
+      # DB stores confidence as smallint = round(raw * 1000) (see the schema
+      # comment in 41_create_data_tables.sql and the writer in
+      # fct_birdnet_process_deployment.R); the input is 0-1.
       # is.na(score) keeps clips whose linked result was deleted (spectrograms
       # .result_id is ON DELETE SET NULL): they have no confidence to compare,
       # and dropping them would hide annotatable clips from the queue entirely.
-      score_threshold <- as.integer(score_val * 10000)
+      score_threshold <- as.integer(score_val * 1000)
       df <- df |> dplyr::filter(is.na(score) | score <= score_threshold)
     }
 
@@ -1349,7 +1351,10 @@ app_server <- function(input, output, session, pool) {
     labs[is.na(labs)] <- df$species_short[is.na(labs)]
 
     df_show <- df |>
-      dplyr::mutate(prediction = labs, score = score / 10000) |>
+      # confidence is stored as smallint = round(raw * 1000); see the schema
+      # comment in 41_create_data_tables.sql and the writer in
+      # fct_birdnet_process_deployment.R.
+      dplyr::mutate(prediction = labs, score = score / 1000) |>
       dplyr::select(prediction, score, start, end_sec)
 
     DT::datatable(df_show, options = list(dom = "t", pageLength = 5)) |>

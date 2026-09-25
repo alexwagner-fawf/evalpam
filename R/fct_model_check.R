@@ -60,8 +60,9 @@ get_glm_data <- function(pool, project_id, species_id) {
 
   if(nrow(df) == 0) return(df)
 
-  # Confidence umrechnen: DB speichert als smallint (x10000)
-  df$confidence <- df$confidence / 10000
+  # Confidence umrechnen: DB speichert als smallint (x1000), siehe
+  # 41_create_data_tables.sql und den Writer in fct_birdnet_process_deployment.R.
+  df$confidence <- df$confidence / 1000
 
   # Logit-Score (wie Wood & Kahl empfehlen)
   # Clamp um log(0) und log(Inf) zu vermeiden

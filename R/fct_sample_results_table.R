@@ -186,7 +186,7 @@ sample_results_table <- function(confidence_selection_mode = "top",
 
   if(confidence_selection_mode == "top"){
     # with_ties = FALSE caps the group at exactly n_per_species. confidence is a
-    # smallint (raw * 10000), so ties at the cut-off are common and the default
+    # smallint (raw * 1000), so ties at the cut-off are common and the default
     # with_ties = TRUE would return more than n rows for such a group.
     result_selection <- results_query_based |>
       dplyr::slice_max(confidence, n = n_per_species, with_ties = FALSE) |>
