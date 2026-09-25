@@ -604,11 +604,18 @@ app_server <- function(input, output, session, pool) {
         s.selection_mode,
         af.deployment_id,
         sg.group_id
-      FROM import.results r
-      JOIN import.audio_files af ON af.audio_file_id = r.audio_file_id
-      JOIN import.spectrograms s ON s.audio_file_id = r.audio_file_id
-                                AND s.begin_time_ms = r.begin_time_ms
+      FROM import.spectrograms s
+      JOIN import.audio_files af ON af.audio_file_id = s.audio_file_id
       JOIN import.deployments d  ON af.deployment_id = d.deployment_id
+      -- The clip's OWN detection. This MUST join on result_id, not on the time
+      -- window: a window join (audio_file_id + begin_time_ms) also matches every
+      -- other species' detection in the same 3 s window AND every detection from
+      -- other settings_ids, so one clip came back as many rows and the queue
+      -- reported a foreign, usually lower, confidence. It also silently undid the
+      -- settings_ids filter applied at sampling time (sample_results_table()).
+      -- result_id is nullable (FK is ON DELETE SET NULL), so LEFT JOIN keeps
+      -- clips whose result was deleted; they carry a NULL score.
+      LEFT JOIN import.results r ON r.result_id = s.result_id
       -- Occupancy-group membership (one group per clip in the usual case; MIN
       -- keeps it single-valued if a clip ever belongs to several groups). Used
       -- to keep a group's clips contiguous in the queue (see queue_base).
@@ -618,7 +625,7 @@ app_server <- function(input, output, session, pool) {
         GROUP BY spectrogram_id
       ) sg ON sg.spectrogram_id = s.spectrogram_id
       WHERE d.project_id = $1
-      ORDER BY af.relative_path, r.begin_time_ms
+      ORDER BY af.relative_path, s.begin_time_ms
     "
     DBI::dbGetQuery(pool, query, params = list(input$selected_project)) |>
       dplyr::arrange(species_id, dplyr::desc(score))
@@ -768,8 +775,11 @@ app_server <- function(input, output, session, pool) {
     score_val <- score_start_d()
     if (!is.null(score_val)) {
       # DB stores confidence as smallint (raw_conf * 10000); the slider is 0-1.
+      # is.na(score) keeps clips whose linked result was deleted (spectrograms
+      # .result_id is ON DELETE SET NULL): they have no confidence to compare,
+      # and dropping them would hide annotatable clips from the queue entirely.
       score_threshold <- as.integer(score_val * 10000)
-      df <- df |> dplyr::filter(score <= score_threshold)
+      df <- df |> dplyr::filter(is.na(score) | score <= score_threshold)
     }
 
     # Optional queue filters (from the collapsible "Queue filters" menu). An

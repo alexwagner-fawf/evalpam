@@ -13,7 +13,10 @@
 #'   \describe{
 #'     \item{"top"}{Select the \code{n_per_species} highest-confidence detections per group.}
 #'     \item{"random"}{Randomly sample \code{n_per_species} detections per group.}
-#'     \item{"stratified"}{Sample detections stratified across equally-spaced confidence intervals, where number of intervals equals \code{n_per_species}}
+#'     \item{"stratified"}{Split each group into \code{n_per_species} equal-count
+#'       (quantile) confidence bins and randomly sample one detection per bin,
+#'       yielding \code{n_per_species} detections spread across the confidence
+#'       range (or every detection, when the group holds fewer).}
 #'   }
 #'
 #' @param n_per_species Integer. Number of detections to select per group.
@@ -65,12 +68,13 @@
 #' @return A tibble containing the selected detection results.
 #'
 #' @details
-#' The function performs database-side grouping when possible and only
-#' collects data into memory after sampling (except for stratified mode,
-#' where sampling is performed locally).
+#' All three modes are evaluated database-side; results are only collected into
+#' memory after sampling.
 #'
-#' Stratified sampling divides confidence values into
-#' \code{n_per_species} bins and randomly selects one observation per bin.
+#' Stratified sampling uses equal-count (quantile) bins via \code{NTILE}, not
+#' equal-width bins over \code{[min, max]}. Detector confidences cluster near the
+#' low end, so equal-width bins leave most of the range empty and would return
+#' far fewer than \code{n_per_species} rows per group.
 #'
 #' @examples
 #' \dontrun{
@@ -112,11 +116,14 @@ sample_results_table <- function(confidence_selection_mode = "top",
   # kept. With no result_ids the argument is a no-op.
   use_priority <- !is.null(result_ids) && result_id_mode == "prioritize"
 
-  # Stratified sampling keeps one row per confidence bin, so a group can yield
-  # fewer than n_per_species rows even when many exist. That makes the
-  # priority-first "cap vs. fill" logic ill-defined (a listed set may collapse
-  # to <n strata and get silently topped up from non-listed rows), so the
-  # combination is disallowed.
+  # Disallowed combination. The original reason (equal-width bins could collapse
+  # a listed set to far fewer than n_per_species rows, which then got silently
+  # topped up from non-listed rows) no longer applies now that stratification
+  # uses equal-count NTILE bins. What remains is that the bins would be computed
+  # within each priority split separately, so "spread across the confidence
+  # range" would hold for the listed and non-listed halves individually rather
+  # than for the group as a whole. That is arguably acceptable, but it is
+  # untested, so the guard stays until the behaviour is specified.
   if (use_priority && confidence_selection_mode == "stratified") {
     stop("`result_id_mode = \"prioritize\"` is not supported with ",
          "`confidence_selection_mode = \"stratified\"`. Use \"top\" or ",
@@ -178,29 +185,29 @@ sample_results_table <- function(confidence_selection_mode = "top",
     dplyr::group_by(dplyr::across(dplyr::all_of(selection_grouping)))
 
   if(confidence_selection_mode == "top"){
+    # with_ties = FALSE caps the group at exactly n_per_species. confidence is a
+    # smallint (raw * 10000), so ties at the cut-off are common and the default
+    # with_ties = TRUE would return more than n rows for such a group.
     result_selection <- results_query_based |>
-      dplyr::slice_max(confidence, n = n_per_species) |>
+      dplyr::slice_max(confidence, n = n_per_species, with_ties = FALSE) |>
       dplyr::collect()
   }
 
   if(confidence_selection_mode == "stratified"){
 
-    results_query_based_strat <- results_query_based |>
-      dplyr::mutate(
-        min_conf = min(confidence),
-        max_conf = max(confidence),
-        bin_width = ifelse(min_conf == max_conf, 10000, (max_conf - min_conf) / n_per_species),
-        conf_class = floor((confidence - min_conf) / bin_width)
-      ) |>
-      dplyr::mutate(
-        conf_class = pmin(conf_class, n_per_species - 1)
-      )
-
-    result_selection <- results_query_based_strat |>
+    # Equal-COUNT (quantile) bins, not equal-width. Detector confidences cluster
+    # hard at the low end, so equal-width bins over [min, max] left most bins
+    # empty and a group yielded far fewer than n_per_species clips. NTILE splits
+    # each group into n_per_species buckets of near-equal size along the
+    # confidence order, so taking one random row per bucket returns exactly
+    # n_per_species rows (or every row, when the group holds fewer) while still
+    # spanning the whole confidence range.
+    result_selection <- results_query_based |>
+      dplyr::mutate(conf_class = dplyr::ntile(confidence, n_per_species)) |>
       dplyr::group_by(conf_class, .add = TRUE) |>
       dplyr::slice_sample(n = 1) |>
       dplyr::ungroup() |>
-      dplyr::select(-min_conf, -max_conf, -bin_width, -conf_class) |>
+      dplyr::select(-conf_class) |>
       dplyr::collect()
   }
 
